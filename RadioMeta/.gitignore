@@ -1,0 +1,16 @@
+# Build outputs / local caches
+bin/
+obj/
+build*/
+.vs/
+*.dll
+*.pdb
+*.cache
+*.user
+*.suo
+*.log
+
+# Real machine-specific configuration and user data
+*.local.xml
+RadioMetaHistory.json
+RadioNowPlayingHistory.json # Ignore legacy local history data; never package it

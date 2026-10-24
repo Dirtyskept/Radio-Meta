@@ -1,0 +1,1104 @@
+<div id="RadioMetaDashboard"
+     data-role="page"
+     class="page type-interior pluginConfigurationPage page-windowScroll"
+     data-controller="__plugin/RadioMetaDashboard-v16.js">
+
+    <div class="content-primary">
+        <div id="radioHistoryToolbar">
+            <h1>Radio Meta</h1>
+        </div>
+        <section id="radioStationsSection" aria-labelledby="radioStationsHeading">
+            <div id="radioStationsCard">
+                <h2 id="radioStationsHeading">Internet Radio Stations</h2>
+                <div id="radioStationCurrentPlayback" class="radio-current-playback" aria-labelledby="radioCurrentPlaybackLabel">
+                    <div class="radio-current-playback-main">
+                        <div class="radio-current-playback-copy">
+                            <span id="radioCurrentPlaybackLabel" class="radio-current-playback-kicker">CURRENTLY PLAYING IN EMBY</span>
+                            <strong>Use the currently playing station</strong>
+                            <span>Detect the active station and pre-fill the fields below. No file is created until you select Create .strm.</span>
+                        </div>
+                        <button id="radioStationAddCurrentButton" type="button" class="emby-button raised button-submit radio-station-add-current" title="Pre-fill the station form and test its live metadata" aria-label="Add currently playing station to Radio Meta">Add to Radio Meta</button>
+                    </div>
+                    <div id="radioStationStreamTestResult" class="radio-current-playback-test-result" data-state="idle" role="status" aria-live="polite" title="A read-only stream check uses the resolved stream URL, validates the public destination, and can take up to 30 seconds. It shows raw station metadata before Ignore Metadata Phrases is applied.">Tests the current stream for metadata (up to 30 seconds).</div>
+                </div>
+                <div id="radioStationCreateForm" class="radio-station-create-form">
+                    <div class="radio-station-create-field">
+                        <label for="radioStationCreateName">Station name</label>
+                        <input id="radioStationCreateName" class="emby-input" type="text" maxlength="160" autocomplete="off" placeholder="e.g. My Favorite Radio" />
+                    </div>
+                    <div class="radio-station-create-field">
+                        <label for="radioStationCreateUrl">Stream URL</label>
+                        <input id="radioStationCreateUrl" class="emby-input" type="url" maxlength="2048" autocomplete="url" placeholder="https://example.com/stream" />
+                    </div>
+                    <div class="radio-station-create-field">
+                        <label for="radioStationCreateArtworkUrl">Station logo URL (optional)</label>
+                        <input id="radioStationCreateArtworkUrl" class="emby-input" type="url" maxlength="2048" autocomplete="off" placeholder="https://example.com/logo.png" />
+                    </div>
+                    <div class="radio-station-create-primary-row">
+                        <button id="radioStationCreateButton" type="button" class="emby-button raised button-submit"><span>Create .strm</span></button>
+                        <span class="radio-station-create-help">Creates the station file using the fields above.</span>
+                    </div>
+                    <div class="radio-station-folder-row">
+                        <div id="radioStationFolderShortcut" class="radio-station-folder-shortcut" aria-label="Configured station folder" aria-live="polite">
+                            <span class="radio-station-folder-shortcut-label">Station folder</span>
+                            <span id="radioStationFolderDisplay" class="radio-station-folder-shortcut-value" title="">Loading...</span>
+                        </div>
+                        <button id="radioStationFolderChange" type="button" class="emby-button radio-station-folder-change" title="Change the station folder">Change</button>
+                    </div>
+                </div>
+                <div class="radio-station-scan-intro-row">
+                    <div class="radio-station-scan-button-wrap">
+                        <button id="radioStationScanButton" type="button" class="emby-button raised button-submit" aria-controls="radioStationFolderPanel" aria-expanded="false"><span>Show Folder</span></button>
+                    </div>
+                    <div class="radio-station-scan-description radio-station-scan-description-folder">
+                        <strong>Show Folder</strong>
+                        <span>Opens and scans the configured folder to list existing .strm stations. Click Hide Folder to collapse the list; reopening scans again. Artwork is matched by filename.</span>
+                    </div>
+                </div>
+            </div>
+            <p id="radioStationCreateStatus" role="status" aria-live="polite"></p>
+            <section id="radioStationFolderPanel" aria-label="Configured station folder contents" style="display:none">
+                <p id="radioStationScanStatus" role="status" aria-live="polite">The folder contents are hidden. Select Show Folder to scan and display stations.</p>
+                <div id="radioStationScanResults" aria-live="polite"></div>
+            </section>
+        </section>
+
+        <div id="radioHistoryActions" class="radio-history-toolbar-actions radio-history-action-bar" role="group" aria-label="Radio history actions">
+            <button id="radioHistoryScan" type="button" class="emby-button raised button-submit" aria-controls="radioHistoryPanel" aria-expanded="false">
+                <span>Show History</span>
+            </button>
+            <button id="radioHistoryClear" type="button" class="emby-button raised button-delete" disabled>
+                <span>Clear all history</span>
+            </button>
+        </div>
+
+        <section id="radioHistoryPanel" aria-label="Radio playback history" style="display:none">
+            <p id="radioStatus" role="status" aria-live="polite">History is hidden. Select Show History to load saved entries.</p>
+            <div id="radioHistory" aria-live="polite"></div>
+        </section>
+
+        <section id="radioSavedTitleFixesSection" aria-labelledby="radioSavedTitleFixesHeading">
+            <h2 id="radioSavedTitleFixesHeading">Saved Title Fixes</h2>
+            <p class="radio-path-help">Corrections created from the Edit button are saved here. Exact song corrections and reusable station cleanup rules are managed together, independently of play history.</p>
+            <p id="radioTitleFixesStatus" role="status" aria-live="polite">Loading saved title fixes...</p>
+            <div id="radioTitleFixes" aria-live="polite"></div>
+        </section>
+
+        <section id="radioStationModeSection" aria-labelledby="radioStationModeHeading">
+            <h2 id="radioStationModeHeading">Station Metadata Settings</h2>
+            <p>
+                Enter an exact .strm title to target one station, or an exact Emby device name (for example, <strong>Safari iOS</strong>) to target every station playing on that device. Station-specific rules take priority over device-wide rules. <strong>Carplay</strong> clears old song metadata when the station changes; the delay waits until the song/artist stays unchanged for the selected time (0 = off).
+            </p>
+
+            <div id="radioStationModeForm">
+                <div class="radio-settings-field">
+                    <label for="radioStationModeName">Station / Device</label>
+                    <input id="radioStationModeName" class="emby-input" type="text" maxlength="160" autocomplete="off"
+                           placeholder="(.strm title / Safari iOS)" />
+                </div>
+                <div class="radio-settings-field">
+                    <label for="radioStationModeValue">Metadata mode</label>
+                    <select id="radioStationModeValue" class="emby-select">
+                        <option value="Automatic">Automatic</option>
+                        <option value="StationOnly">Station only</option>
+                        <option value="Carplay">Carplay</option>
+                    </select>
+                </div>
+                <div class="radio-settings-field">
+                    <label for="radioStationModeDelay">Metadata change delay</label>
+                    <select id="radioStationModeDelay" class="emby-select">
+                        <option value="0">0 seconds (off)</option>
+                        <option value="1">1 second</option>
+                        <option value="2">2 seconds</option>
+                        <option value="3">3 seconds</option>
+                        <option value="5">5 seconds</option>
+                        <option value="10">10 seconds</option>
+                        <option value="15">15 seconds</option>
+                        <option value="30">30 seconds</option>
+                    </select>
+                </div>
+                <button id="radioStationModeAdd" type="button" class="emby-button raised button-submit">
+                    <span>Save Rule</span>
+                </button>
+            </div>
+            <p id="radioStationModeStatus" role="status" aria-live="polite">Loading station metadata settings...</p>
+            <div id="radioStationModeRules" aria-live="polite"></div>
+        </section>
+
+        <section id="radioIgnoreSection" aria-labelledby="radioIgnoreHeading">
+            <h2 id="radioIgnoreHeading">Ignore Metadata Phrases</h2>
+            <p>
+                Add text that should not be treated as a song title, such as station slogans or status messages.
+                Matching is case-insensitive and ignores a candidate when the phrase appears anywhere in its metadata.
+                Leave Station blank to apply a rule to every station. Use specific phrases: any song containing a configured phrase will be ignored.
+                Up to 100 rules can be saved. Changes are stored in the plugin's XML configuration.
+            </p>
+
+            <div id="radioIgnoreForm">
+                <div class="radio-ignore-field">
+                    <label for="radioIgnoreStation">Station (optional)</label>
+                    <input id="radioIgnoreStation" class="emby-input" type="text" maxlength="160"
+                           autocomplete="off" placeholder="Blank = all stations" />
+                </div>
+                <div class="radio-ignore-field">
+                    <label for="radioIgnorePhrase">Phrase to ignore</label>
+                    <input id="radioIgnorePhrase" class="emby-input" type="text" maxlength="200"
+                           autocomplete="off" placeholder="e.g. The way Radio should be" />
+                </div>
+                <button id="radioIgnoreAdd" type="button" class="emby-button raised button-submit">
+                    <span>Add Phrase</span>
+                </button>
+            </div>
+
+            <p id="radioIgnoreStatus" role="status" aria-live="polite">Loading ignore phrase settings...</p>
+            <div id="radioIgnoreRules" aria-live="polite"></div>
+        </section>
+
+
+        <section id="radioPathSettingsSection" aria-labelledby="radioPathSettingsHeading">
+            <h2 id="radioPathSettingsHeading">Station Folder &amp; FFprobe</h2>
+            <p>Configure where Radio Meta finds station files and which FFprobe executable it uses. Changes are saved to the plugin configuration.</p>
+
+            <div id="radioPathSettingsForm">
+                <div class="radio-path-field">
+                    <label for="radioStationFolder">Station folder (optional)</label>
+                    <input id="radioStationFolder" class="emby-input" type="text" maxlength="1024"
+                           autocomplete="off" placeholder="c:\your\strm\folder here" />
+                    <div class="radio-path-help">Folder containing station .strm files and matching artwork. Leave blank to detect the currently playing audio .strm item automatically.</div>
+                </div>
+                <div class="radio-path-field">
+                    <label for="radioFfprobePath">FFprobe executable path (optional)</label>
+                    <input id="radioFfprobePath" class="emby-input" type="text" maxlength="1024"
+                           autocomplete="off" placeholder="%APPDATA%\Emby-Server\system\ffprobe.exe" />
+                    <div class="radio-path-help">Path to ffprobe.exe. Leave blank to search Windows PATH. Environment variables such as %APPDATA% are supported.</div>
+                </div>
+                <button id="radioPathSettingsSave" type="button" class="emby-button raised button-submit">
+                    <span>Save Path</span>
+                </button>
+            </div>
+            <p id="radioPathSettingsStatus" role="status" aria-live="polite">Loading path settings...</p>
+        </section>
+
+        
+        <section id="radioDiagnosticsSection" aria-labelledby="radioDiagnosticsHeading">
+            <h2 id="radioDiagnosticsHeading">Radio Meta Diagnostics</h2>
+            <p>
+                Check the plugin, current metadata, Emby sessions, and visible player elements. Recent reader events
+                highlight detected, accepted, filtered, and rejected titles, plus HTTP/ICY and FFprobe failures.
+                The in-memory event list resets when Emby restarts; reports omit URLs, tokens, filesystem paths, and session/device IDs.
+            </p>
+            <div class="radio-diagnostics-actions">
+                <button id="radioDiagnosticsRun" type="button" class="emby-button raised button-submit">
+                    <span>Run diagnostics</span>
+                </button>
+                <button id="radioDiagnosticsCopy" type="button" class="emby-button raised" style="display:none">
+                    <span>Copy report</span>
+                </button>
+            </div>
+            <p id="radioDiagnosticsStatus" role="status" aria-live="polite">Diagnostics have not been run.</p>
+            <div id="radioDiagnosticsResults" style="display:none">
+                <p id="radioDiagnosticsSummary" class="radio-diagnostics-summary"></p>
+                <div id="radioDiagnosticsChecks" class="radio-diagnostics-checks" aria-live="polite"></div>
+                <section id="radioDiagnosticsPerformance" class="radio-diagnostics-performance" aria-labelledby="radioDiagnosticsPerformanceHeading" style="display:none">
+                    <h3 id="radioDiagnosticsPerformanceHeading">Recent Performance Measurements</h3>
+                    <p class="radio-diagnostics-performance-help">Rolling in-memory measurements only. Durations include the relevant metadata lookup or FFprobe process and are reset when Emby restarts.</p>
+                    <div id="radioDiagnosticsPerformanceSummary" class="radio-diagnostics-performance-summary" aria-live="polite"></div>
+                    <div id="radioDiagnosticsPerformanceList" class="radio-diagnostics-performance-list" aria-live="polite"></div>
+                </section>
+                <section id="radioDiagnosticsEvents" class="radio-diagnostics-events" aria-labelledby="radioDiagnosticsEventsHeading" style="display:none">
+                    <h3 id="radioDiagnosticsEventsHeading">Recent Metadata Activity</h3>
+                    <p class="radio-diagnostics-events-help">Latest first. Green/blue titles were detected or parsed; amber entries were filtered or rejected; red entries are reader errors.</p>
+                    <div id="radioDiagnosticsEventList" class="radio-diagnostic-event-list" aria-live="polite"></div>
+                </section>
+                <pre id="radioDiagnosticsReport" class="radio-diagnostics-report" aria-label="Full diagnostic report" tabindex="0"></pre>
+            </div>
+        </section>
+
+        
+        
+
+        <style>
+            #radioStationsSection { box-sizing: border-box !important; width: 727px !important; max-width: min(727px, calc(100vw - 32px)) !important; min-width: 0 !important; margin: 0 0 22px; padding: 0; border-bottom: 0; }
+            #radioStationsCard { box-sizing: border-box !important; width: 100% !important; max-width: 100% !important; min-width: 0 !important; padding: 14px 12px 12px; border: 1px solid rgba(128, 128, 128, 0.28); border-radius: 8px; }
+            #radioStationsSection h2 { font-size: 1.15em; margin: 0 0 14px; }
+            .radio-station-create-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; width: 100%; max-width: 100%; margin: 0; }
+            .radio-station-create-field { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+            .radio-station-create-field label { font-size: .9em; }
+            .radio-station-action-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) minmax(0, 1fr); align-items: center; gap: 12px; border-top: 1px solid rgba(128, 128, 128, 0.18); padding-top: 14px; margin-top: 4px; }
+            .radio-station-action-row > #radioStationCreateButton { justify-self: start; white-space: nowrap; }
+            .radio-station-folder-shortcut { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-width: 0; margin: 0; text-align: center; }
+            .radio-station-folder-shortcut-label { opacity: .72; font-size: .82em; white-space: nowrap; }
+            .radio-station-folder-shortcut-value { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .82em; }
+            .radio-station-folder-change { flex: 0 0 auto; padding-left: 10px !important; padding-right: 10px !important; }
+            #radioStationFolderChange:focus-visible, #radioStationAddCurrentButton:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+            .radio-station-add-current-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; min-width: 0; }
+            .radio-station-add-current { flex: 0 0 auto; white-space: nowrap; }
+            .radio-station-scan-intro-row { box-sizing: border-box; display: grid; grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr); align-items: stretch; gap: 14px; width: 100%; max-width: 100%; border-top: 1px solid rgba(128, 128, 128, 0.18); padding-top: 14px; margin-top: 14px; min-width: 0; }
+            .radio-station-scan-button-wrap { display: flex; align-items: flex-start; justify-content: flex-start; min-width: 0; }
+            .radio-station-scan-button-wrap > button { white-space: nowrap; }
+            .radio-station-scan-description { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: .9em; line-height: 1.4; overflow-wrap: anywhere; }
+            .radio-station-scan-description strong { font-weight: 600; }
+            .radio-station-scan-description + .radio-station-scan-description { border-left: 1px solid rgba(128, 128, 128, 0.18); padding-left: 14px; }
+            #radioStationCreateStatus, #radioStationScanStatus { font-size: .9em; opacity: .85; margin: 6px 0 12px; }
+            @media (max-width: 600px) { .radio-station-action-row { grid-template-columns: minmax(0, 1fr); align-items: start; } .radio-station-folder-shortcut { align-items: flex-start; text-align: left; } .radio-station-add-current-wrap { align-items: flex-start; } .radio-station-scan-intro-row { grid-template-columns: minmax(0, 1fr); gap: 12px; } .radio-station-scan-intro-row .radio-station-scan-description + .radio-station-scan-description { border-left: 0; border-top: 1px solid rgba(128, 128, 128, 0.18); padding: 12px 0 0; } }
+            #radioStationScanResults { display: grid; gap: 6px; max-width: 900px; min-width: 0; }
+            .radio-station-scan-row { display: flex; align-items: flex-start; gap: 12px; min-width: 0; border: 1px solid rgba(128,128,128,.3); border-radius: 6px; padding: 8px 10px; }
+            .radio-station-scan-logo { flex: 0 0 64px; width: 64px; height: 64px; object-fit: contain; border-radius: 4px; }
+            .radio-station-scan-content { flex: 1 1 auto; min-width: 0; }
+            .radio-station-scan-row > button { flex: 0 0 auto; }
+            .radio-station-edit {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                min-width: 32px;
+                width: 32px;
+                height: 32px;
+                padding: 4px;
+            }
+            .radio-station-edit svg { display: block; width: 18px; height: 18px; }
+            .radio-station-scan-logo-placeholder { flex: 0 0 64px; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; border-radius: 4px; background: rgba(128,128,128,.12); font-size: 1.6em; opacity: .65; }
+            .radio-station-scan-content { flex: 1 1 auto; min-width: 0; }
+            .radio-station-scan-name { font-weight: 700; overflow-wrap: anywhere; }
+            .radio-station-scan-meta { font-size: .9em; opacity: .85; overflow-wrap: anywhere; margin-top: 4px; }
+            .radio-station-scan-url { overflow-wrap: anywhere; word-break: break-word; font-family: monospace; font-size: .85em; margin-top: 4px; }
+            .radio-station-scan-row:nth-child(even) { background: rgba(128,128,128,.07); }
+
+            @media (max-width: 520px) { .radio-station-scan-logo, .radio-station-scan-logo-placeholder { flex-basis: 48px; width: 48px; height: 48px; } .radio-station-scan-row { gap: 9px; padding: 7px; } }
+
+            .radio-history-toolbar-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+            #radioHistoryToolbar {
+                display: flex;
+                align-items: center;
+                justify-content: flex-start;
+                flex-wrap: wrap;
+                gap: 12px;
+                max-width: 1100px;
+            }
+
+            .radio-history-action-bar {
+                max-width: 1100px;
+                margin-top: 14px;
+                margin-bottom: 4px;
+            }
+
+            #radioSavedTitleFixesSection {
+                max-width: 1100px;
+                margin-top: 20px;
+                padding-top: 14px;
+                border-top: 1px solid rgba(128, 128, 128, 0.25);
+            }
+
+            #radioSavedTitleFixesSection h2 {
+                font-size: 1.15em;
+                margin-bottom: 8px;
+            }
+
+            #radioHistory {
+                max-width: 1100px;
+                min-width: 0;
+                overflow-x: auto;
+                border: 1px solid rgba(128, 128, 128, 0.35);
+                border-radius: 8px;
+            }
+
+            .radio-history-table {
+                width: 100%;
+                min-width: 720px;
+                border-collapse: collapse;
+                color: inherit;
+            }
+
+            .radio-history-table th,
+            .radio-history-table td {
+                padding: 9px 12px;
+                text-align: left;
+                vertical-align: middle;
+                border-bottom: 1px solid rgba(128, 128, 128, 0.24);
+            }
+
+            .radio-history-table th {
+                font-weight: 600;
+                white-space: nowrap;
+                background: rgba(128, 128, 128, 0.10);
+            }
+
+            .radio-history-table tbody tr.radio-history-row-alternate {
+                background: rgba(128, 128, 128, 0.055);
+            }
+
+            .radio-history-table tbody tr:hover {
+                background: rgba(128, 128, 128, 0.12);
+            }
+
+            .radio-history-table tbody tr:last-child td {
+                border-bottom: 0;
+            }
+
+            .radio-history-number,
+            .radio-history-played-at,
+            .radio-history-actions {
+                white-space: nowrap;
+            }
+
+            .radio-history-number {
+                width: 1%;
+                opacity: 0.78;
+            }
+
+            .radio-history-song {
+                font-weight: 600;
+                overflow-wrap: anywhere;
+            }
+
+            .radio-history-artist,
+            .radio-history-station {
+                overflow-wrap: anywhere;
+            }
+
+            .radio-history-played-at {
+                opacity: 0.82;
+            }
+
+            .radio-history-actions {
+                width: 1%;
+                text-align: center !important;
+            }
+
+            .radio-history-delete,
+            .radio-history-edit {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                min-width: 32px;
+                width: 32px;
+                height: 32px;
+                padding: 4px;
+            }
+
+            .radio-history-delete svg,
+            .radio-history-edit svg {
+                display: block;
+                width: 18px;
+                height: 18px;
+            }
+
+            .radio-history-edit { margin-right: 4px; }
+            .radio-history-edit-row td { padding: 0 !important; background: rgba(128, 128, 128, 0.08); }
+            .radio-history-inline-editor { padding: 14px 16px; display: grid; gap: 10px; }
+            .radio-history-edit-fields { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(220px, 2fr); gap: 12px; align-items: end; }
+            .radio-history-edit-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+            .radio-history-edit-field input { box-sizing: border-box; width: 100%; min-width: 0; padding: 9px 10px; }
+            .radio-history-edit-original { padding: 8px 10px; border: 1px solid rgba(128, 128, 128, 0.35); border-radius: 6px; overflow-wrap: anywhere; }
+            .radio-history-edit-preserve { display: flex; flex-direction: column; gap: 5px; max-width: 760px; }
+            .radio-history-edit-preserve input { box-sizing: border-box; width: 100%; min-width: 0; padding: 9px 10px; }
+            .radio-history-edit-preserve-help { opacity: 0.72; font-size: 0.88em; line-height: 1.35; }
+            .radio-history-edit-scope { display: flex; flex-wrap: wrap; gap: 14px; }
+            .radio-history-edit-scope label { display: inline-flex; gap: 7px; align-items: center; }
+            .radio-history-edit-preview { font-size: 0.92em; opacity: 0.82; }
+            .radio-history-edit-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+            .radio-history-edit-actions button { min-width: 84px; }
+
+            #radioStationModeSection,
+            #radioIgnoreSection,
+            #radioPathSettingsSection {
+                max-width: 1100px;
+                margin-top: 32px;
+                padding-top: 20px;
+                border-top: 1px solid rgba(128, 128, 128, 0.35);
+            }
+
+            #radioStationModeForm,
+            #radioIgnoreForm,
+            #radioPathSettingsForm {
+                display: grid;
+                grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) auto;
+                gap: 10px;
+                align-items: end;
+                margin: 14px 0;
+            }
+
+
+            .radio-settings-field,
+            .radio-ignore-field,
+            .radio-path-field {
+                display: flex;
+                flex-direction: column;
+                gap: 5px;
+                min-width: 0;
+            }
+
+            .radio-settings-field input,
+            .radio-settings-field select,
+            .radio-ignore-field input,
+            .radio-ignore-field select,
+            .radio-path-field input {
+                box-sizing: border-box;
+                width: 100%;
+                min-width: 0;
+                padding: 9px 10px;
+            }
+
+            #radioStationModeRules,
+            #radioIgnoreRules,
+            #radioTitleFixes {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                margin-top: 12px;
+            }
+
+            .radio-station-mode-row,
+            .radio-ignore-rule,
+            .radio-title-cleanup-rule,
+            .radio-title-correction {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                padding: 10px 12px;
+                border-radius: 8px;
+                background: rgba(128, 128, 128, 0.12);
+                min-width: 0;
+            }
+
+            .radio-station-mode-details,
+            .radio-ignore-rule-text,
+            .radio-title-cleanup-rule-text,
+            .radio-title-correction-text {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                min-width: 0;
+                overflow-wrap: anywhere;
+            }
+
+            .radio-station-mode-description,
+            .radio-station-mode-scope,
+            .radio-ignore-rule-scope,
+            .radio-title-cleanup-rule-scope,
+            .radio-title-correction-scope {
+                opacity: 0.75;
+                font-size: 0.9em;
+            }
+
+            .radio-station-mode-remove,
+            .radio-ignore-remove,
+            .radio-title-cleanup-remove,
+            .radio-title-correction-remove {
+                flex: 0 0 auto;
+            }
+
+            .radio-path-help {
+                opacity: 0.72;
+                font-size: 0.9em;
+                line-height: 1.35;
+            }
+
+            #radioStationModeStatus,
+            #radioIgnoreStatus,
+            #radioTitleFixesStatus,
+            #radioPathSettingsStatus { min-height: 1.4em; }
+
+            @media (max-width: 720px) {
+                #radioStationModeForm,
+                #radioIgnoreForm,
+                .radio-history-edit-fields,
+                #radioPathSettingsForm { grid-template-columns: 1fr; }
+                .radio-station-folder-shortcut { flex: 1 1 100%; min-width: 0; margin: 4px 0 0; }
+                .radio-station-folder-shortcut-value { flex: 1 1 auto; }
+
+                .radio-station-mode-row,
+                .radio-ignore-rule,
+                .radio-title-cleanup-rule { align-items: flex-start; }
+            }
+
+
+            /* Radio Meta width correction: Emby gives plugin configuration pages
+               the full available width. Constrain the actual content children,
+               not the outer Emby page shell. */
+            #RadioMetaDashboard > .content-primary > * {
+                box-sizing: border-box !important;
+                width: 100% !important;
+                max-width: 727px !important;
+                min-width: 0 !important;
+            }
+
+            #RadioMetaDashboard > .content-primary > #radioHistoryToolbar,
+            #RadioMetaDashboard > .content-primary > #radioHistoryActions,
+            #RadioMetaDashboard > .content-primary > section,
+            #RadioMetaDashboard > .content-primary > div[aria-live] {
+                box-sizing: border-box !important;
+                width: 100% !important;
+                max-width: 727px !important;
+                min-width: 0 !important;
+            }
+
+            #RadioMetaDashboard .radio-station-create-form,
+            #RadioMetaDashboard #radioStationModeForm,
+            #RadioMetaDashboard #radioIgnoreForm,
+            #RadioMetaDashboard #radioPathSettingsForm {
+                box-sizing: border-box !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+            }
+
+            #RadioMetaDashboard #radioStationModeForm {
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+                column-gap: 8px !important;
+            }
+            #RadioMetaDashboard .radio-station-create-form { box-sizing: border-box !important; width: 100% !important; max-width: 100% !important; grid-template-columns: minmax(0, 1fr) !important; }
+            #RadioMetaDashboard .radio-station-action-row { box-sizing: border-box !important; width: 100% !important; max-width: 100% !important; min-width: 0 !important; }
+            #RadioMetaDashboard .radio-station-scan-help, #RadioMetaDashboard .radio-station-scan-controls, #RadioMetaDashboard #radioStationCreateStatus, #RadioMetaDashboard #radioStationScanStatus, #RadioMetaDashboard #radioStationScanResults { box-sizing: border-box !important; width: 100% !important; max-width: 100% !important; min-width: 0 !important; }
+            #RadioMetaDashboard .radio-station-create-field,
+            #RadioMetaDashboard .radio-settings-field,
+            #RadioMetaDashboard .radio-ignore-field,
+            #RadioMetaDashboard .radio-path-field {
+                min-width: 0 !important;
+                max-width: 100% !important;
+            }
+
+            #RadioMetaDashboard input,
+            #RadioMetaDashboard select,
+            #RadioMetaDashboard textarea {
+                box-sizing: border-box !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
+            }
+
+            #RadioMetaDashboard #radioStationScanResults,
+            #RadioMetaDashboard #radioTitleFixes,
+            #RadioMetaDashboard #radioStationModeRules,
+            #RadioMetaDashboard #radioIgnoreRules {
+                width: 100% !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
+                box-sizing: border-box !important;
+            }
+
+            #RadioMetaDashboard .radio-station-folder-shortcut {
+                flex: 1 1 100%;
+                min-width: 0;
+                flex-wrap: wrap;
+                margin-left: 0;
+            }
+
+            #RadioMetaDashboard .radio-station-folder-shortcut-value {
+                flex: 1 1 180px;
+                min-width: 0;
+            }
+
+            /* Keep the station-folder label, path, and Change button together.
+               Earlier responsive flex rules were stretching this middle action
+               across a full row and leaving the Change button detached. */
+            #RadioMetaDashboard .radio-station-action-row {
+                align-items: center !important;
+            }
+            #RadioMetaDashboard .radio-station-folder-shortcut {
+                display: flex !important;
+                flex-direction: column !important;
+                align-items: center !important;
+                justify-content: center !important;
+                gap: 4px !important;
+                flex: 0 1 auto !important;
+                width: auto !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            #RadioMetaDashboard .radio-station-folder-shortcut-value {
+                flex: 0 1 auto !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
+                text-align: center !important;
+            }
+            #RadioMetaDashboard .radio-station-folder-change {
+                margin: 0 !important;
+                align-self: center !important;
+            }
+
+            /* Final station action layout: all four controls share one row at the 727px card width. */
+            #RadioMetaDashboard .radio-station-action-row {
+                display: grid !important;
+                grid-template-columns: max-content minmax(0, 1fr) max-content max-content !important;
+                align-items: center !important;
+                column-gap: 12px !important;
+                row-gap: 0 !important;
+            }
+            #RadioMetaDashboard .radio-station-action-row > #radioStationCreateButton {
+                grid-column: 1;
+                grid-row: 1;
+                justify-self: start;
+            }
+            #RadioMetaDashboard #radioStationFolderShortcut {
+                grid-column: 2;
+                grid-row: 1;
+                display: flex !important;
+                flex-direction: column !important;
+                align-items: flex-start !important;
+                justify-content: center !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                text-align: left !important;
+            }
+            #RadioMetaDashboard .radio-station-folder-shortcut-label {
+                white-space: nowrap !important;
+            }
+            #RadioMetaDashboard .radio-station-folder-shortcut-value {
+                display: block !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
+                overflow: hidden !important;
+                text-overflow: ellipsis !important;
+                white-space: nowrap !important;
+                text-align: left !important;
+            }
+            #RadioMetaDashboard #radioStationFolderChange {
+                grid-column: 3;
+                grid-row: 1;
+                justify-self: center;
+                align-self: center !important;
+                margin: 0 !important;
+                white-space: nowrap !important;
+            }
+            #RadioMetaDashboard .radio-station-add-current-wrap {
+                grid-column: 4;
+                grid-row: 1;
+                justify-self: end;
+                align-items: flex-end !important;
+                min-width: 0 !important;
+                margin: 0 !important;
+            }
+            @media (max-width: 600px) {
+                #RadioMetaDashboard .radio-station-action-row {
+                    grid-template-columns: minmax(0, 1fr) !important;
+                    row-gap: 12px !important;
+                }
+                #RadioMetaDashboard .radio-station-action-row > #radioStationCreateButton,
+                #RadioMetaDashboard #radioStationFolderShortcut,
+                #RadioMetaDashboard #radioStationFolderChange,
+                #RadioMetaDashboard .radio-station-add-current-wrap {
+                    grid-column: 1;
+                    grid-row: auto;
+                }
+                #RadioMetaDashboard #radioStationFolderShortcut { align-items: flex-start !important; }
+                #RadioMetaDashboard .radio-station-add-current-wrap { align-items: flex-start !important; }
+            }
+
+            @media (max-width: 727px) {
+                #RadioMetaDashboard .radio-station-create-form,
+                #RadioMetaDashboard #radioStationModeForm,
+                #RadioMetaDashboard #radioIgnoreForm,
+                #RadioMetaDashboard #radioPathSettingsForm {
+                    grid-template-columns: minmax(0, 1fr) !important;
+                }
+            }
+
+        
+            /* Keep Add Phrase sized to its label instead of stretching across the full form column. */
+            #RadioMetaDashboard #radioIgnoreAdd {
+                justify-self: start !important;
+                width: max-content !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
+                flex: 0 0 auto !important;
+                white-space: nowrap !important;
+                padding-left: 18px !important;
+                padding-right: 18px !important;
+            }
+
+
+            /* Keep Save Path compact instead of stretching across the full form width. */
+            #RadioMetaDashboard #radioPathSettingsSave {
+                justify-self: start !important;
+                width: max-content !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
+                flex: 0 0 auto !important;
+                white-space: nowrap !important;
+                padding-left: 18px !important;
+                padding-right: 18px !important;
+            }
+
+            #radioDiagnosticsSection {
+                max-width: 1100px;
+                margin-top: 32px;
+                padding-top: 20px;
+                border-top: 1px solid rgba(128, 128, 128, 0.35);
+            }
+            .radio-diagnostics-actions {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                align-items: center;
+                margin: 12px 0;
+            }
+            #radioDiagnosticsStatus {
+                overflow-wrap: anywhere;
+            }
+            .radio-diagnostics-summary {
+                font-weight: 600;
+                margin: 12px 0;
+            }
+            .radio-diagnostics-checks {
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+                margin: 10px 0;
+            }
+            .radio-diagnostic-check {
+                display: grid;
+                grid-template-columns: 72px minmax(140px, 0.75fr) minmax(200px, 2fr);
+                align-items: start;
+                gap: 10px;
+                padding: 8px 10px;
+                border: 1px solid rgba(128, 128, 128, 0.22);
+                border-radius: 5px;
+            }
+            .radio-diagnostic-status {
+                font-weight: 700;
+                font-size: 0.9em;
+            }
+            .radio-diagnostic-status.pass { color: #48a868; }
+            .radio-diagnostic-status.warn { color: #c58a26; }
+            .radio-diagnostic-status.fail { color: #d9534f; }
+            .radio-diagnostic-status.info { opacity: 0.8; }
+            .radio-diagnostic-detail {
+                overflow-wrap: anywhere;
+                opacity: 0.9;
+            }
+
+            .radio-diagnostics-performance {
+                margin: 14px 0 16px;
+                padding: 12px;
+                border: 1px solid rgba(128, 128, 128, 0.28);
+                border-radius: 7px;
+                background: rgba(128, 128, 128, 0.045);
+            }
+            .radio-diagnostics-performance h3 { margin: 0 0 5px; font-size: 1.05em; }
+            .radio-diagnostics-performance-help { margin: 0 0 10px; opacity: .78; font-size: .9em; }
+            .radio-diagnostics-performance-summary {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+                gap: 7px;
+                margin: 10px 0 12px;
+            }
+            .radio-diagnostic-performance-metric {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                padding: 9px 10px;
+                border: 1px solid rgba(128, 128, 128, 0.24);
+                border-radius: 5px;
+                background: rgba(128, 128, 128, 0.07);
+                min-width: 0;
+            }
+            .radio-diagnostic-performance-label { opacity: .78; font-size: .82em; }
+            .radio-diagnostic-performance-metric strong { overflow-wrap: anywhere; }
+            .radio-diagnostics-performance-list { display: flex; flex-direction: column; gap: 7px; }
+            .radio-diagnostic-performance-row {
+                display: flex;
+                flex-direction: column;
+                gap: 5px;
+                padding: 9px 11px;
+                border: 1px solid rgba(128, 128, 128, 0.24);
+                border-left: 4px solid #8d969f;
+                border-radius: 5px;
+                background: rgba(128, 128, 128, 0.07);
+                overflow-wrap: anywhere;
+            }
+            .radio-diagnostic-performance-row.performance-success { border-left-color: #43b66a; }
+            .radio-diagnostic-performance-row.performance-warning { border-left-color: #d69a25; }
+            .radio-diagnostic-performance-row-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
+            .radio-diagnostic-performance-row-heading time { opacity: .75; font-size: .82em; }
+            .radio-diagnostic-performance-details { font-size: .9em; opacity: .87; }
+            .radio-diagnostics-no-performance { opacity: .75; padding: 8px 0; }
+
+            .radio-diagnostics-events {
+                margin: 14px 0 16px;
+                padding: 12px;
+                border: 1px solid rgba(128, 128, 128, 0.28);
+                border-radius: 7px;
+                background: rgba(128, 128, 128, 0.045);
+            }
+            .radio-diagnostics-events h3 { margin: 0 0 5px; font-size: 1.05em; }
+            .radio-diagnostics-events-help { margin: 0 0 10px; opacity: .78; font-size: .9em; }
+            .radio-diagnostic-event-list { display: flex; flex-direction: column; gap: 7px; }
+            .radio-diagnostic-event {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr);
+                gap: 4px;
+                padding: 9px 11px;
+                border: 1px solid rgba(128, 128, 128, 0.24);
+                border-left: 4px solid #8d969f;
+                border-radius: 5px;
+                background: rgba(128, 128, 128, 0.07);
+                overflow-wrap: anywhere;
+            }
+            .radio-diagnostic-event.event-detected { border-left-color: #43b66a; }
+            .radio-diagnostic-event.event-parsed { border-left-color: #3698e6; }
+            .radio-diagnostic-event.event-accepted { border-left-color: #43b66a; }
+            .radio-diagnostic-event.event-filtered,
+            .radio-diagnostic-event.event-rejected,
+            .radio-diagnostic-event.event-waiting { border-left-color: #d69a25; }
+            .radio-diagnostic-event.event-error { border-left-color: #db514c; }
+            .radio-diagnostic-event-meta { display:flex; flex-wrap:wrap; gap:6px 10px; opacity:.78; font-size:.82em; }
+            .radio-diagnostic-event-status { font-weight:700; text-transform:uppercase; letter-spacing:.025em; }
+            .radio-diagnostic-event.event-detected .radio-diagnostic-event-status,
+            .radio-diagnostic-event.event-accepted .radio-diagnostic-event-status { color:#43b66a; }
+            .radio-diagnostic-event.event-parsed .radio-diagnostic-event-status { color:#3698e6; }
+            .radio-diagnostic-event.event-filtered .radio-diagnostic-event-status,
+            .radio-diagnostic-event.event-rejected .radio-diagnostic-event-status,
+            .radio-diagnostic-event.event-waiting .radio-diagnostic-event-status { color:#d69a25; }
+            .radio-diagnostic-event.event-error .radio-diagnostic-event-status { color:#db514c; }
+            .radio-diagnostic-event-title { font-size:1.02em; font-weight:750; line-height:1.35; color:inherit; }
+            .radio-diagnostic-event.event-detected .radio-diagnostic-event-title,
+            .radio-diagnostic-event.event-accepted .radio-diagnostic-event-title { color:#43b66a; }
+            .radio-diagnostic-event.event-parsed .radio-diagnostic-event-title { color:#3698e6; }
+            .radio-diagnostic-event.event-filtered .radio-diagnostic-event-title,
+            .radio-diagnostic-event.event-rejected .radio-diagnostic-event-title { color:#d69a25; }
+            .radio-diagnostic-event.event-error .radio-diagnostic-event-title { color:#db514c; }
+            .radio-diagnostic-event-details { font-size:.9em; opacity:.87; }
+            .radio-diagnostic-no-events { opacity:.75; padding:8px 0; }
+
+            .radio-diagnostics-report {
+                box-sizing: border-box;
+                width: 100%;
+                max-height: 480px;
+                overflow: auto;
+                white-space: pre-wrap;
+                overflow-wrap: anywhere;
+                padding: 12px;
+                border: 1px solid rgba(128, 128, 128, 0.35);
+                border-radius: 5px;
+                background: rgba(128, 128, 128, 0.07);
+                color: inherit;
+                font: 0.9em/1.45 monospace;
+            }
+            @media (max-width: 650px) {
+                .radio-diagnostic-check {
+                    grid-template-columns: 65px minmax(0, 1fr);
+                }
+                .radio-diagnostic-detail {
+                    grid-column: 2;
+                }
+            }
+
+
+            /* One-line settings refresh. Keep Emby's current theme and existing control IDs. */
+            #RadioMetaDashboard .radio-current-playback {
+                box-sizing: border-box !important;
+                display: flex !important;
+                flex-direction: column !important;
+                align-items: stretch !important;
+                gap: 8px !important;
+                width: 100% !important;
+                min-width: 0 !important;
+                margin: 0 0 14px !important;
+                padding: 12px !important;
+                border: 1px solid rgba(128, 128, 128, 0.30) !important;
+                border-radius: 6px !important;
+                background: rgba(128, 128, 128, 0.07) !important;
+            }
+            #RadioMetaDashboard .radio-current-playback-main {
+                box-sizing: border-box !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: space-between !important;
+                gap: 16px !important;
+                width: 100% !important;
+                min-width: 0 !important;
+            }
+            #RadioMetaDashboard .radio-current-playback-test-result {
+                display: block !important;
+                box-sizing: border-box !important;
+                width: 100% !important;
+                min-width: 0 !important;
+                min-height: 1.35em !important;
+                margin: 0 !important;
+                padding-top: 7px !important;
+                border-top: 1px solid rgba(128, 128, 128, 0.22) !important;
+                color: #a7a7a7 !important;
+                font-size: .86em !important;
+                font-weight: 500 !important;
+                line-height: 1.35 !important;
+                white-space: nowrap !important;
+                overflow: hidden !important;
+                text-overflow: ellipsis !important;
+                opacity: .84 !important;
+            }
+            #RadioMetaDashboard .radio-current-playback-test-result[data-state="checking"] {
+                color: #d1ad49 !important;
+                opacity: 1 !important;
+            }
+            #RadioMetaDashboard .radio-current-playback-test-result[data-state="found"] {
+                color: #b8b8b8 !important;
+                opacity: 1 !important;
+                font-weight: 500 !important;
+            }
+            #RadioMetaDashboard .radio-current-playback-test-result[data-state="empty"] {
+                color: #c99a39 !important;
+                opacity: 1 !important;
+            }
+            #RadioMetaDashboard .radio-current-playback-test-result[data-state="error"] {
+                color: #c45e5e !important;
+                opacity: 1 !important;
+            }
+            #RadioMetaDashboard .radio-current-playback-copy {
+                display: flex !important;
+                flex: 1 1 auto !important;
+                flex-direction: column !important;
+                gap: 5px !important;
+                min-width: 0 !important;
+                line-height: 1.4 !important;
+            }
+            #RadioMetaDashboard .radio-current-playback-kicker {
+                font-size: .72em !important;
+                font-weight: 600 !important;
+                letter-spacing: .045em !important;
+                opacity: .70 !important;
+            }
+            #RadioMetaDashboard .radio-current-playback-copy strong {
+                font-size: 1em !important;
+                font-weight: 600 !important;
+            }
+            #RadioMetaDashboard .radio-current-playback-copy > span:last-child {
+                font-size: .88em !important;
+                opacity: .78 !important;
+                overflow-wrap: anywhere !important;
+            }
+            #RadioMetaDashboard #radioStationAddCurrentButton {
+                flex: 0 0 auto !important;
+                align-self: center !important;
+                white-space: nowrap !important;
+                margin: 0 !important;
+            }
+            #RadioMetaDashboard .radio-station-create-primary-row {
+                display: flex !important;
+                align-items: center !important;
+                justify-content: flex-start !important;
+                flex-wrap: wrap !important;
+                gap: 10px !important;
+                width: 100% !important;
+                min-width: 0 !important;
+                margin-top: 4px !important;
+            }
+            #RadioMetaDashboard .radio-station-create-primary-row #radioStationCreateButton {
+                justify-self: start !important;
+                flex: 0 0 auto !important;
+                width: max-content !important;
+                white-space: nowrap !important;
+            }
+            #RadioMetaDashboard .radio-station-create-help {
+                min-width: 0 !important;
+                font-size: .86em !important;
+                line-height: 1.35 !important;
+                opacity: .72 !important;
+                overflow-wrap: anywhere !important;
+            }
+            #RadioMetaDashboard .radio-station-folder-row {
+                display: flex !important;
+                align-items: center !important;
+                justify-content: space-between !important;
+                flex-wrap: wrap !important;
+                gap: 10px !important;
+                width: 100% !important;
+                min-width: 0 !important;
+                margin-top: 2px !important;
+                padding-top: 11px !important;
+                border-top: 1px solid rgba(128, 128, 128, .18) !important;
+            }
+            #RadioMetaDashboard #radioStationFolderShortcut {
+                display: flex !important;
+                flex: 1 1 220px !important;
+                flex-direction: column !important;
+                align-items: flex-start !important;
+                justify-content: center !important;
+                gap: 4px !important;
+                width: auto !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                text-align: left !important;
+            }
+            #RadioMetaDashboard .radio-station-folder-shortcut-value {
+                display: block !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
+                overflow: hidden !important;
+                text-overflow: ellipsis !important;
+                white-space: nowrap !important;
+                text-align: left !important;
+            }
+            #RadioMetaDashboard #radioStationFolderChange {
+                flex: 0 0 auto !important;
+                align-self: center !important;
+                margin: 0 !important;
+                white-space: nowrap !important;
+            }
+            #RadioMetaDashboard .radio-station-scan-intro-row {
+                grid-template-columns: max-content minmax(0, 1fr) !important;
+                align-items: start !important;
+            }
+            #RadioMetaDashboard #radioStationModeForm,
+            #RadioMetaDashboard #radioIgnoreForm,
+            #RadioMetaDashboard #radioPathSettingsForm {
+                display: grid !important;
+                grid-template-columns: minmax(0, 1fr) !important;
+                gap: 12px !important;
+                align-items: start !important;
+                margin: 14px 0 !important;
+            }
+            #RadioMetaDashboard .radio-settings-field,
+            #RadioMetaDashboard .radio-ignore-field,
+            #RadioMetaDashboard .radio-path-field {
+                display: flex !important;
+                flex-direction: column !important;
+                gap: 5px !important;
+                width: 100% !important;
+                min-width: 0 !important;
+            }
+            #RadioMetaDashboard #radioStationModeAdd,
+            #RadioMetaDashboard #radioIgnoreAdd,
+            #RadioMetaDashboard #radioPathSettingsSave {
+                justify-self: start !important;
+                align-self: start !important;
+                width: max-content !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
+                white-space: nowrap !important;
+                margin: 0 !important;
+            }
+            #RadioMetaDashboard #radioStationsCard h2 { margin-bottom: 14px !important; }
+            @media (max-width: 600px) {
+                #RadioMetaDashboard .radio-current-playback-main {
+                    flex-direction: column !important;
+                    align-items: stretch !important;
+                    gap: 12px !important;
+                }
+                #RadioMetaDashboard #radioStationAddCurrentButton {
+                    align-self: flex-start !important;
+                }
+                #RadioMetaDashboard .radio-station-scan-intro-row {
+                    grid-template-columns: minmax(0, 1fr) !important;
+                    gap: 10px !important;
+                }
+                #RadioMetaDashboard .radio-station-folder-row {
+                    align-items: flex-start !important;
+                }
+                #RadioMetaDashboard #radioStationFolderChange {
+                    align-self: flex-start !important;
+                }
+            }
+
+</style>
+    </div>
+</div>

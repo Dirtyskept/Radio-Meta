@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Generic Radio Meta plugin configuration.
+  StationFolder may be blank to enable automatic detection of the currently playing
+  .strm item when Emby identifies it as Audio. Set it to a folder to restrict station
+  recognition and enumerate station .strm files in that folder.
+  FfprobePath may be blank when ffprobe is available on PATH. Environment variables
+  such as %APPDATA% are expanded in the Emby process environment at runtime.
+  Copy/rename this file to the exact filename below only when manually provisioning config:
+    8a7f6e31-9d42-4b85-a103-72c6f0e54b19.xml
+-->
+<PluginConfiguration>
+  <StationFolder></StationFolder>
+  <FfprobePath></FfprobePath>
+  <FfprobeDelaySeconds>10</FfprobeDelaySeconds>
+  <EnableDirectIcyFallback>true</EnableDirectIcyFallback>
+  <RadioHistoryLimit>200</RadioHistoryLimit>
+  <!-- IgnoreMetadataPhrases can hold multiple RadioMetadataIgnorePhraseRule entries.
+       Leave StationName empty to ignore a phrase globally; set it to the exact .strm
+       station name to scope the rule. Matching is a case-insensitive substring check.
+       The Radio Play History page edits this setting automatically.
+       Example rule (normally add this from the page instead):
+       <RadioMetadataIgnorePhraseRule>
+         <StationName>TNT Radio - 320k</StationName>
+         <Phrase>The way Radio should be</Phrase>
+       </RadioMetadataIgnorePhraseRule> -->
+  <IgnoreMetadataPhrases />
+  <!-- StationMetadataModes defaults to Automatic with no metadata delay for unmatched playback.
+       Use Mode=StationOnly to skip metadata lookups, or Mode=Carplay to clear previously injected song metadata on station changes.
+       MetadataDelaySeconds waits for a song/artist candidate to remain unchanged before acceptance; 0 disables it (range 0-30).
+       StationName may be a .strm title for one station or an exact Emby device name to target all stations on that device.
+       Station-specific rules take priority. MetadataDelayDeviceName is retained for older station-specific rules.
+       Example: <RadioStationMetadataModeRule><StationName>Safari iOS</StationName><Mode>Carplay</Mode><MetadataDelaySeconds>5</MetadataDelaySeconds></RadioStationMetadataModeRule> -->
+  <StationMetadataModes />
+  <!-- TitleCleanupRules change only accepted song titles. Blank StationName applies globally.
+       RuleType TrailingBracketCode4 removes a trailing [AB12]-style code. Common labels
+       Live, Edit, Demo, Mono and Full are preserved. PreserveLabels adds comma-separated
+       labels such as Jazz or Folk. RuleType ExactSuffix removes the configured literal Suffix.
+       The Radio History page can add/remove rules without rebuilding the plugin. -->
+  <TitleCleanupRules />
+  <!-- TitleCorrections are maintained by the inline Edit control on each Radio History row.
+       SongOnly corrections map an exact station + incoming title to the corrected title. -->
+  <TitleCorrections />
+</PluginConfiguration>
