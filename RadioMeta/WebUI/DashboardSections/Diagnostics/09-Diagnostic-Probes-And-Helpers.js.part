@@ -1,0 +1,254 @@
+        function diagnosticValue(object, pascalName, camelName) {
+            if (!object) return '';
+            if (object[pascalName] !== undefined) return object[pascalName];
+            if (object[camelName] !== undefined) return object[camelName];
+            return '';
+        }
+
+        function diagnosticText(value) {
+            return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+
+        function diagnosticVisible(element) {
+            if (!element || !element.isConnected) return false;
+            var rect = element.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return false;
+            for (var node = element; node && node.nodeType === 1; node = node.parentElement) {
+                var style = window.getComputedStyle(node);
+                if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) === 0) return false;
+            }
+            return true;
+        }
+
+        function diagnosticProviderValue(item, wantedName) {
+            var providerIds = diagnosticValue(item, 'ProviderIds', 'providerIds');
+            if (!providerIds || typeof providerIds !== 'object') return '';
+            var wanted = String(wantedName || '').toLowerCase();
+            var keys = Object.keys(providerIds);
+            for (var i = 0; i < keys.length; i++) {
+                if (keys[i].toLowerCase() === wanted) {
+                    var value = providerIds[keys[i]];
+                    if (typeof value === 'string' && value.trim()) return diagnosticText(value);
+                }
+            }
+            return '';
+        }
+
+        function diagnosticNormalize(value) {
+            return diagnosticText(value).toLowerCase();
+        }
+
+        function diagnosticSanitizeError(value) {
+            var message = String(value && value.message ? value.message : value || 'Unknown error');
+            message = message.replace(/([?&](?:X-Emby-Token|api_key|access_token|token)=)[^&\s]+/gi, '$1[REDACTED]');
+            message = message.replace(/https?:\/\/[^\s'"<>]+/gi, '[URL]');
+            return message.slice(0, 220);
+        }
+
+        function diagnosticContainsTrack(text, track, includeStation) {
+            var normalized = diagnosticNormalize(text);
+            if (!normalized || !track || !track.song || !track.artist) return false;
+            if (normalized.indexOf(diagnosticNormalize(track.song)) < 0 ||
+                normalized.indexOf(diagnosticNormalize(track.artist)) < 0) return false;
+            if (includeStation && track.station &&
+                normalized.indexOf(diagnosticNormalize(track.station)) < 0) return false;
+            return true;
+        }
+
+        function diagnosticGetJson(path, timeoutMs) {
+            return new Promise(function (resolve, reject) {
+                var finished = false;
+                var timeout = window.setTimeout(function () {
+                    if (finished) return;
+                    finished = true;
+                    reject(new Error('Request timed out'));
+                }, timeoutMs || 9000);
+                try {
+                    ApiClient.getJSON(ApiClient.getUrl(path)).then(function (result) {
+                        if (finished) return;
+                        finished = true;
+                        window.clearTimeout(timeout);
+                        resolve(result);
+                    }).catch(function (error) {
+                        if (finished) return;
+                        finished = true;
+                        window.clearTimeout(timeout);
+                        reject(error || new Error('Request failed'));
+                    });
+                } catch (error) {
+                    if (finished) return;
+                    finished = true;
+                    window.clearTimeout(timeout);
+                    reject(error || new Error('Request failed'));
+                }
+            });
+        }
+
+        // Probe both known display-resource URLs automatically. The old __plugin
+        // path is diagnostic-only; ConfigurationPage is the supported embedded-resource route.
+        function diagnosticProbeDisplayResources(timeoutMs) {
+            function probe(path) {
+                return new Promise(function (resolve) {
+                    var finished = false;
+                    var timer = window.setTimeout(function () {
+                        if (finished) return;
+                        finished = true;
+                        resolve({ path: path, ok: false, status: 0, contentType: '', bytes: 0, looksLikeModule: false, error: 'Request timed out' });
+                    }, timeoutMs || 6000);
+                    try {
+                        window.fetch(path, { method: 'GET', credentials: 'same-origin', cache: 'no-store' })
+                            .then(function (response) {
+                                return response.text().then(function (body) {
+                                    if (finished) return;
+                                    finished = true;
+                                    window.clearTimeout(timer);
+                                    var contentType = response.headers.get('content-type') || '';
+                                    resolve({
+                                        path: path,
+                                        ok: response.ok,
+                                        status: response.status,
+                                        contentType: contentType,
+                                        bytes: body.length,
+                                        looksLikeModule: /javascript|ecmascript/i.test(contentType) && /define\s*\(/.test(body),
+                                        error: ''
+                                    });
+                                });
+                            })
+                            .catch(function (error) {
+                                if (finished) return;
+                                finished = true;
+                                window.clearTimeout(timer);
+                                resolve({ path: path, ok: false, status: 0, contentType: '', bytes: 0, looksLikeModule: false, error: String(error && error.message ? error.message : error || 'Request failed') });
+                            });
+                    } catch (error) {
+                        if (finished) return;
+                        finished = true;
+                        window.clearTimeout(timer);
+                        resolve({ path: path, ok: false, status: 0, contentType: '', bytes: 0, looksLikeModule: false, error: String(error && error.message ? error.message : error || 'Request failed') });
+                    }
+                });
+            }
+            return Promise.all([
+                probe('/web/__plugin/RadioMetaIntegratedDisplay.js'),
+                probe('/web/ConfigurationPage?name=RadioMetaIntegratedDisplay.js')
+            ]).then(function (results) {
+                return { legacy: results[0], embedded: results[1] };
+            });
+        }
+
+        function diagnosticGetSessions(timeoutMs) {
+            return new Promise(function (resolve, reject) {
+                var finished = false;
+                var timeout = window.setTimeout(function () {
+                    if (finished) return;
+                    finished = true;
+                    reject(new Error('Request timed out'));
+                }, timeoutMs || 9000);
+                try {
+                    if (!ApiClient || typeof ApiClient.getSessions !== 'function') {
+                        throw new Error('Emby session API is not available in this page');
+                    }
+                    ApiClient.getSessions().then(function (result) {
+                        if (finished) return;
+                        finished = true;
+                        window.clearTimeout(timeout);
+                        resolve(Array.isArray(result) ? result : []);
+                    }).catch(function (error) {
+                        if (finished) return;
+                        finished = true;
+                        window.clearTimeout(timeout);
+                        reject(error || new Error('Session request failed'));
+                    });
+                } catch (error) {
+                    if (finished) return;
+                    finished = true;
+                    window.clearTimeout(timeout);
+                    reject(error || new Error('Session request failed'));
+                }
+            });
+        }
+
+        function diagnosticPerformanceInsights(performance) {
+            if (!performance || typeof performance !== 'object') return null;
+            var networkCount = Number(diagnosticValue(performance, 'NetworkLookupCount', 'networkLookupCount') || 0);
+            var cacheHits = Number(diagnosticValue(performance, 'NetworkCacheHitCount', 'networkCacheHitCount') || 0);
+            var recentSamples = diagnosticValue(performance, 'RecentSamples', 'recentSamples') || [];
+            if (!Array.isArray(recentSamples)) recentSamples = [];
+            var recentNetwork = recentSamples.filter(function (sample) {
+                return String(diagnosticValue(sample, 'Operation', 'operation') || '').toLowerCase() === 'network lookup';
+            });
+            var recentUncached = recentNetwork.filter(function (sample) {
+                return diagnosticValue(sample, 'CacheHit', 'cacheHit') !== true;
+            });
+            function numericValue(sample, pascalName, camelName) {
+                var raw = diagnosticValue(sample, pascalName, camelName);
+                if (raw === '' || raw === null || raw === undefined) return null;
+                var value = Number(raw);
+                return Number.isFinite(value) ? value : null;
+            }
+            function mean(values) {
+                return values.length ? values.reduce(function (total, value) { return total + value; }, 0) / values.length : null;
+            }
+            function stageValues(samples, pascalName, camelName) {
+                return samples.map(function (sample) { return numericValue(sample, pascalName, camelName); })
+                    .filter(function (value) { return value !== null; });
+            }
+            var recentDurations = stageValues(recentUncached, 'DurationMs', 'durationMs').sort(function (a, b) { return a - b; });
+            var p95 = recentDurations.length ? recentDurations[Math.max(0, Math.ceil(recentDurations.length * 0.95) - 1)] : null;
+            var shoutcastSamples = recentUncached.filter(function (sample) {
+                var attempted = diagnosticValue(sample, 'ShoutcastAttempted', 'shoutcastAttempted');
+                var cancelled = diagnosticValue(sample, 'ShoutcastCancelled', 'shoutcastCancelled') === true;
+                return !cancelled && (attempted === true || attempted === undefined || attempted === null);
+            });
+            var shoutcast = stageValues(shoutcastSamples, 'ShoutcastDurationMs', 'shoutcastDurationMs');
+            var icy = recentUncached.filter(function (sample) {
+                return diagnosticValue(sample, 'IcyAttempted', 'icyAttempted') === true &&
+                    diagnosticValue(sample, 'IcyCancelled', 'icyCancelled') !== true;
+            });
+            var icyDurations = stageValues(icy, 'IcyDurationMs', 'icyDurationMs');
+            var resultCounts = {};
+            recentNetwork.forEach(function (sample) {
+                var cacheHit = diagnosticValue(sample, 'CacheHit', 'cacheHit') === true;
+                var source = cacheHit ? 'cache hit' : String(diagnosticValue(sample, 'ResultSource', 'resultSource') || diagnosticValue(sample, 'Outcome', 'outcome') || 'unknown');
+                resultCounts[source] = (resultCounts[source] || 0) + 1;
+            });
+            var resultSummary = Object.keys(resultCounts).sort().map(function (key) { return key + '=' + resultCounts[key]; }).join(', ');
+            return {
+                networkCount: networkCount,
+                cacheHits: cacheHits,
+                cacheHitRatePercent: networkCount > 0 ? (cacheHits / networkCount) * 100 : null,
+                recentNetworkCount: recentNetwork.length,
+                recentUncachedCount: recentUncached.length,
+                recentP95UncachedMs: p95,
+                recentAverageShoutcastMs: mean(shoutcast),
+                recentAverageIcyMs: mean(icyDurations),
+                recentIcyCount: icyDurations.length,
+                recentResultSummary: resultSummary || 'no recent network samples'
+            };
+        }
+
+        function diagnosticShoutcast404Summary(events) {
+            if (!Array.isArray(events)) return null;
+            var matches = events.filter(function (entry) {
+                var source = String(diagnosticValue(entry, 'Source', 'source') || '');
+                var detail = String(diagnosticValue(entry, 'Details', 'details') || '');
+                return /shoutcast/i.test(source) && /(?:HTTP\s+request\s+returned\s+status\s+404|status\s*[:=]?\s*404|HTTP\s+404)/i.test(detail);
+            });
+            if (!matches.length) return null;
+            var endpoints = [];
+            matches.forEach(function (entry) {
+                var source = String(diagnosticValue(entry, 'Source', 'source') || 'Shoutcast endpoint');
+                if (endpoints.indexOf(source) < 0) endpoints.push(source);
+            });
+            return matches.length + ' recent HTTP 404 event(s) from ' + endpoints.join(', ') + '. These are non-fatal when the station supplies usable ICY metadata; repeated endpoint probes may add latency.';
+        }
+
+        function diagnosticAddCheck(checks, status, name, detail) {
+            checks.push({ status: status, name: name, detail: String(detail || '') });
+        }
+
+        function diagnosticSetCopyButtonVisible(visible) {
+            var button = view.querySelector('#radioDiagnosticsCopy');
+            if (button) button.style.display = visible ? '' : 'none';
+        }
+

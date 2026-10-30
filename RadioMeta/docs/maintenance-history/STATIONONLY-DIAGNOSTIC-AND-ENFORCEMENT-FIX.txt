@@ -1,0 +1,37 @@
+RADIO META v1.3.105 — STATIONONLY DIAGNOSTIC AND ENFORCEMENT FIX
+
+Purpose
+A station with no song metadata (such as OZFM) can be intentionally configured as StationOnly. The plugin must honour this setting, show the station title, and not report normal no-lookup behavior as a metadata failure.
+
+Changes
+- Ignores a carried-over RadioMetaStation ProviderId when it contradicts both the selected .strm filename and the current item's visible name, so a previous station cannot trigger the wrong StationOnly rule during a handoff.
+- Checks StationOnly against the .strm file name, Emby item title, and RadioMetaStation provider identity attached to the selected station item, allowing for brief naming differences during station transitions. It does not use the title/ProviderId of a different stale candidate. Device-targeted legacy rules still respect their configured device scope.
+- Resolves and enforces the setting even when Emby briefly omits NowPlayingItem, provided the playback event still identifies the selected .strm file.
+- When StationOnly matches, clears any previously injected song metadata, skips HTTP/ICY metadata reading and FFprobe, and records a clear diagnostic event.
+- The diagnostic report now states the effective mode for the detected current station, which saved rule matched, the safe station identity names it evaluated (not full paths), and the configured StationOnly rule names. It uses the active playback session's .strm basename and device scope where available.
+- Expected empty accepted-track cache and missing RadioMeta song/artist ProviderIds are informational under StationOnly, not warnings.
+- Adds a diagnostic warning if a same-named StationOnly rule is present but not active, or if new metadata-reader events for the same station occur after its intentional-skip event.
+- Retains the no-metadata station-title fallback and exposes its source and polling state.
+
+Unchanged
+- No ICY or Shoutcast timeout was shortened. The 40-interval live ICY ceiling and separate manual-test timeout remain unchanged.
+- No proxy code, station file writes, library refresh logic, metadata parser, title corrections, history behavior, plugin GUID, configuration identity, or WebLoader files were intentionally changed.
+- No minification.
+
+Test on Windows/Emby
+1. Confirm the saved StationOnly rule for OZFM appears in Radio Meta settings.
+2. Switch from a station with metadata to OZFM. The player should show OZFM's station title and not the previous station's song/artist.
+3. Run diagnostics while playback is active. The Current station metadata policy should show StationOnly and explicitly say lookup is disabled. The StationOnly lookup enforcement check should pass, with no newer metadata-reader events for OZFM after the skip event.
+4. Switch back to a metadata-producing station. Song and artist should update normally.
+5. Try another StationOnly station if one exists, and verify ordinary album playback is unchanged.
+
+If the report says Automatic for OZFM, the no-lookup rule isn't matching the actual station identity. The report also shows the saved StationOnly rule names to make that mismatch easier to identify.
+
+Verification limitation: JavaScript syntax/bundle/ZIP checks can be run here; C# compilation and live playback behavior must be tested on the Windows Emby server.
+
+
+Follow-up in v1.3.106
+- StationOnly matching now accepts a short detected station label when the saved StationOnly rule differs only by a recognized bitrate suffix, such as "OZFM" vs "OZFM - 96k".
+- Exact matches are still preferred. The relaxed match is limited to StationOnly so it cannot unexpectedly alter Automatic or Carplay rules.
+- Device restrictions on legacy rules are still respected.
+- The dashboard diagnostic recognizes the same bitrate-only name difference so it can warn usefully if a rule still fails to resolve.

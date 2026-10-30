@@ -19,10 +19,15 @@ accepted or rejected, HTTP status, ICY metadata interval information, and safe F
 error summaries. Duplicate events are suppressed briefly to avoid log flooding. The
 trace resets when Emby restarts and is not written to disk.
 
-The direct ICY reader now examines up to 40 metadata intervals per attempt and returns
-as soon as it finds a usable title. The existing five-second HTTP/ICY timeout remains
-unchanged, so a slow stream may time out before all 40 intervals are examined. The
-configured interval limit and reader events are surfaced in diagnostics.
+The direct ICY reader now examines up to 40 metadata intervals per live attempt and returns
+as soon as it finds a usable title. Automatic playback uses a five-second timeout for the
+Shoutcast stage and a separate five-second timeout for direct ICY fallback when needed; the
+manual stream test has its own 30-second overall limit. These are separate mechanisms. The
+Shoutcast unsupported-endpoint cache must not shorten or disable the ICY fallback. Do not
+reduce the live timeout or interval limit solely for performance without testing stations with
+delayed/intermittent metadata (including Affinity Radio). The existing per-stage timeout
+values remain unchanged, so a slow stream may time out before all 40 intervals are examined.
+The active timeout settings, interval limit, and reader events are surfaced in diagnostics.
 
 The plugin still logs high-level status through Emby's normal server logger: whether the
 station folder and FFprobe are available, whether HTTP/ICY metadata was usable, whether

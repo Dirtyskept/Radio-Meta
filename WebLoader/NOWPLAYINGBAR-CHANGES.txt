@@ -1,8 +1,15 @@
-File changed: modules/nowplayingbar/nowplayingbar.js
+Radio Meta WebLoader — nowplayingbar.js integration note
+========================================================
 
-Description: Added a small AMD pointer to the loader resource embedded in RadioMeta.dll.
+Release v1.3.96 does not modify nowplayingbar.js. This note documents the
+existing loader pointer shipped in the WebLoader package for users who choose
+to install the integration. The installer verifies the target hash and requires
+explicit confirmation before replacing the file.
 
-Added code:
+File: modules/nowplayingbar/nowplayingbar.js
+Purpose: Minimal AMD pointer to the loader embedded in RadioMeta.dll.
+
+Existing added code:
 /* Radio Meta DLL loader pointer; implementation is embedded in RadioMeta.dll. */
 ;(function () {
     var p = String(window.location && window.location.pathname || "/");

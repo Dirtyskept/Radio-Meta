@@ -1,0 +1,68 @@
+RADIO META v1.3.98 — SECURITY AND PERFORMANCE HARDENING NOTES
+===========================================================
+
+This v1.3 merge carries forward the first hardening pass tested in the separate
+v1.7.9 experiment. It is source-level hardening, not a certified security audit.
+
+Authorization
+-------------
+Station scan/create/edit/delete, proxy toggle, station list, currently-playing
+station prefill, manual stream metadata test, history, metadata rules, path
+settings, and diagnostics require the Emby Admin role. The read-only authenticated
+CurrentTracks endpoint remains authentication-only for player/dashboard use.
+A non-admin test of management calls returned Emby HTTP 403 in the test setup.
+
+Proxy containment
+-----------------
+- Loopback-only listener; at most 8 client connections and 4 concurrent FFmpeg
+  processes.
+- Headers capped at 8 KB / 5 seconds; first-audio wait capped at 20 seconds.
+- Sidecar JSON cap of 16 KB; upstream URLs capped at 8,192 characters; tokens must
+  be 32 hexadecimal characters; malformed sidecars are rejected.
+- FFmpeg stdout/stderr are handled with bounds; raw stderr URLs are not logged.
+- FFmpeg arguments are passed as process arguments, not concatenated shell text.
+
+Network and file input controls
+-------------------------------
+- Logo download follows redirects manually, disallows HTTPS-to-HTTP downgrade,
+  restricts destinations to public HTTP(S) address space, caps transfer at 5 MB,
+  times out after 12 seconds and checks JPG/PNG signatures.
+- Manual stream-test destinations use public-address checks. Standard metadata
+  probing still allows potential private/LAN source URLs so legitimate local
+  radio sources are not unconditionally broken; a configurable policy remains a
+  future hardening option.
+- Artwork reads, per-response artwork inclusion, Shoutcast and Radio Browser
+  response sizes, FFprobe stdout/stderr, station-file reads and URL lengths are
+  capped. Metadata caches are bounded to 512 entries each.
+- Station names/history text are length-limited in the applicable persistence
+  code, and proxy-enabled edit requests are rejected server-side.
+
+Remaining risks / next phase
+----------------------------
+- Inactive station probes may still run sequentially on a cold scan; large station
+  folders can therefore take time to populate. Add bounded concurrency only after
+  profiling, to avoid disturbing immediate current-track updates.
+- Direct-station .strm and artwork edits are not a fully transactional multi-file
+  database operation. Fault injection and rollback/journal work remains separate.
+- Standard metadata requests have not all been moved to a public-only transport,
+  because blocking private/LAN streams needs an explicit user policy.
+- FFmpeg proxy supports a specific MP3 output path, not every provider, codec,
+  header scheme or HLS variant. Shared sessions are not implemented.
+- Public-only HTTP handlers use direct connection callbacks; environments relying
+  on an outbound HTTP proxy should test logo/test-stream behavior.
+
+Required validation
+-------------------
+1. Build with .NET 8 SDK and the Emby assemblies from the target Windows server.
+2. Test admin and non-admin access, including all management/configuration routes.
+3. Create a direct station, create a proxied station, toggle proxy both ways, edit a
+   direct station, delete a disposable station, and verify targeted library refresh.
+4. Test Live365 proxy playback, switching stations, client disconnect cleanup,
+   plugin shutdown during playback, and requests beyond the concurrency cap.
+5. Test logo download from public HTTPS JPG/PNG sources and confirm local/private
+   destinations are rejected. Test a normal LAN station URL if you use one.
+6. Verify normal metadata capture, song/artist display, station logos, diagnostics,
+   history, and WebLoader integration.
+
+The source package can be statically inspected here, but C# compilation and live
+Emby/security testing must be performed on the user's Windows Emby installation.

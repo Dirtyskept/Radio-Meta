@@ -20,6 +20,7 @@ public sealed class CurrentStreamMetadataTestResponse
 
 // Retain the GET endpoint for compatibility with older dashboard scripts.
 [Route("/RadioMeta/Stations/TestCurrentStreamMetadata", "GET")]
+[Authenticated(Roles = "Admin")]
 public sealed class GetCurrentStreamMetadataTest : IReturn<CurrentStreamMetadataTestResponse>
 {
     public string StationName { get; set; } = string.Empty;
@@ -27,6 +28,7 @@ public sealed class GetCurrentStreamMetadataTest : IReturn<CurrentStreamMetadata
 
 // POST keeps the resolved stream URL in the request body rather than the URL/query string.
 [Route("/RadioMeta/Stations/TestCurrentStreamMetadata", "POST")]
+[Authenticated(Roles = "Admin")]
 public sealed class PostCurrentStreamMetadataTest : IReturn<CurrentStreamMetadataTestResponse>
 {
     public string StationName { get; set; } = string.Empty;
@@ -40,7 +42,7 @@ public sealed class PostCurrentStreamMetadataTest : IReturn<CurrentStreamMetadat
 /// URL is accepted only after server-side public HTTP/HTTPS validation. FFprobe
 /// is intentionally not launched by this interactive test.
 /// </summary>
-[Authenticated]
+[Authenticated(Roles = "Admin")]
 public sealed class CurrentStreamMetadataTestService : IService
 {
     public Task<object> Get(GetCurrentStreamMetadataTest request) =>
@@ -166,7 +168,7 @@ public sealed class CurrentStreamMetadataTestService : IService
     {
         if (string.IsNullOrWhiteSpace(value) ||
             !Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
-            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
+            !RadioMetaUriSchemeHelpers.IsHttpOrHttps(uri) ||
             !string.IsNullOrEmpty(uri.UserInfo))
         {
             return false;

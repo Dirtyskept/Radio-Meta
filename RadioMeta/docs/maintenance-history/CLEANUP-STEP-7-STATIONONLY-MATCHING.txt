@@ -1,0 +1,7 @@
+RADIO META v1.3.106 — CLEANUP FOLLOW-UP
+
+This build addresses the StationOnly setting mismatch found in the v1.3.105 diagnostic. The test report showed the active station identity as "OZFM" but the configured rule as "OZFM - 96k". The exact-name-only lookup therefore chose Automatic mode and kept querying metadata even though the station had been configured not to.
+
+The runtime now accepts the station name with or without a recognized trailing bitrate suffix when checking StationOnly rules. The dashboard warning logic uses the same normalization, so a similar mismatch should be visible and actionable.
+
+No changes were made to the station transition display code that v1.3.105 improved. This is a separate, targeted fix. Please test OZFM and a normal metadata-producing station before continuing the broader cleanup.

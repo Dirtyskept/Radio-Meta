@@ -1,0 +1,143 @@
+        function onViewClick(event) {
+            var target = event.target;
+            if (!target || !target.closest) {
+                return;
+            }
+
+            var historyEdit = target.closest('button[data-history-edit-id]');
+            if (historyEdit) {
+                openHistoryEditor(historyEdit.getAttribute('data-history-edit-id'));
+                return;
+            }
+
+            var historyEditCancel = target.closest('button[data-history-edit-cancel-id]');
+            if (historyEditCancel) {
+                closeHistoryEditor(historyEditCancel.getAttribute('data-history-edit-cancel-id'));
+                return;
+            }
+
+            var historyEditSave = target.closest('button[data-history-edit-save-id]');
+            if (historyEditSave) {
+                saveHistoryTitleCorrection(historyEditSave.getAttribute('data-history-edit-save-id'));
+                return;
+            }
+
+            var historyDelete = target.closest('button[data-history-delete-id]');
+            if (historyDelete) {
+                deleteHistoryEntry(historyDelete.getAttribute('data-history-delete-id'));
+                return;
+            }
+
+            var stationRemove = target.closest('button[data-station-mode-remove]');
+            if (stationRemove) {
+                removeStationModeRule(stationRemove.getAttribute('data-station-mode-remove'));
+                return;
+            }
+
+            var exactCorrectionRemove = target.closest('button[data-title-correction-index]');
+            if (exactCorrectionRemove) {
+                removeTitleCorrection(exactCorrectionRemove.getAttribute('data-title-correction-index'));
+                return;
+            }
+
+            var cleanupRemove = target.closest('button[data-title-cleanup-index]');
+            if (cleanupRemove) {
+                removeTitleCleanupRule(cleanupRemove.getAttribute('data-title-cleanup-index'));
+                return;
+            }
+
+            var ignoreRemove = target.closest('button[data-ignore-index]');
+            if (!ignoreRemove) {
+                return;
+            }
+
+            var indexValue = ignoreRemove.getAttribute('data-ignore-index');
+            var index = Number(indexValue);
+            if (!Number.isInteger(index) || index < 0 || index >= ignoreRules.length) {
+                return;
+            }
+
+            var nextRules = ignoreRules.filter(function (_rule, ruleIndex) {
+                return ruleIndex !== index;
+            });
+            saveIgnoreRules(nextRules, 'Ignore phrase removed and saved.', false);
+        }
+
+        function onViewShow() {
+            if (historyPanelVisible) loadHistory();
+            loadStationModes();
+            loadIgnorePhrases();
+            loadTitleCleanupRules();
+            loadTitleCorrections();
+            loadPathSettings();
+
+            if (refreshTimer === null) {
+                refreshTimer = window.setInterval(function () {
+                    if (historyPanelVisible) loadHistory();
+                }, 20000);
+            }
+        }
+
+        function onViewHide() {
+            if (refreshTimer !== null) {
+                window.clearInterval(refreshTimer);
+                refreshTimer = null;
+            }
+        }
+
+        function createStationFile() {
+            var nameInput = view.querySelector('#radioStationCreateName');
+            var urlInput = view.querySelector('#radioStationCreateUrl');
+            var artworkInput = view.querySelector('#radioStationCreateArtworkUrl');
+            var proxyInput = view.querySelector('#radioStationCreateUseProxy');
+            var button = view.querySelector('#radioStationCreateButton');
+            var status = view.querySelector('#radioStationCreateStatus');
+            if (!nameInput || !urlInput || !artworkInput || !button || !status || button.disabled) return;
+            var name = nameInput.value.trim();
+            var streamUrl = urlInput.value.trim();
+            var artworkUrl = artworkInput.value.trim();
+            var useProxy = !!(proxyInput && proxyInput.checked);
+            if (!name || !streamUrl) { status.textContent = 'Enter both a station name and a stream URL.'; return; }
+            button.disabled = true;
+            status.textContent = useProxy ? 'Creating proxy-enabled station file...' : 'Creating station file...';
+            ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('RadioMeta/Stations/Create'),
+                data: JSON.stringify({ Name: name, StreamUrl: streamUrl, ArtworkUrl: artworkUrl, UseProxy: useProxy }),
+                contentType: 'application/json',
+                dataType: 'json'
+            }).then(function (data) {
+                if (data && typeof data.json === 'function') return data.json();
+                return data;
+            }).then(function (data) {
+                if (typeof data === 'string') { try { data = JSON.parse(data); } catch (ignore) {} }
+                if (data && (data.Success === true || data.success === true)) {
+                    var filePath = data.FilePath || data.filePath || '';
+                    var artworkPath = data.ArtworkPath || data.artworkPath || '';
+                    var logoWarning = String(getValue(data, 'Warning', 'warning') || '');
+                    var createdMessage = 'Created ' + (data.Name || data.name || name) + '.strm' + (useProxy ? ' with proxy enabled' : '') +
+                        (filePath ? ': ' + filePath : '') +
+                        (artworkPath ? '. Logo saved: ' + artworkPath : (artworkUrl ? '. Logo URL was supplied.' : '. No logo supplied.')) +
+                        (logoWarning ? ' ' + logoWarning : '');
+                    status.textContent = createdMessage + ' Resolving targeted Emby library refresh...';
+                    nameInput.value = '';
+                    urlInput.value = '';
+                    artworkInput.value = '';
+                    if (proxyInput) proxyInput.checked = false;
+                    requestTargetedLibraryRefresh(data).then(function (scanResult) {
+                        status.textContent = createdMessage + ' ' + scanResult.message;
+                        scanStationFolder(scanResult.message, data);
+                    });
+                } else {
+                    recordStationOperationFailure('Create station', name, 'server-rejected');
+                    status.textContent = (data && (data.Error || data.error)) || 'The server did not confirm that the station file was created.';
+                }
+            }).catch(function (error) {
+                recordStationOperationFailure('Create station', name, 'request-failed');
+                status.textContent = 'Station creation failed: ' + (error && error.message ? error.message : String(error));
+                console.error('Radio Meta station creation:', error);
+            }).finally(function () { button.disabled = false; });
+        }
+
+
+        // On-demand diagnostic report. Read-only and designed to omit secrets.

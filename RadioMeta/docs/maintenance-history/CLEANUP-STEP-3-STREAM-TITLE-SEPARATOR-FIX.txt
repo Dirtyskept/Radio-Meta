@@ -1,0 +1,43 @@
+RADIO META v1.3.107 — ARTIST/TITLE DASH-SEPARATOR HANDLING
+=========================================================
+
+Why this change
+---------------
+Some station metadata separates artist and title with an en dash (–) or em dash (—)
+instead of the ordinary hyphen-minus ( - ). The previous parser split only on the
+ordinary hyphen separator, so a title such as "Rita Wilson – Everybody Cries" could
+be accepted as a whole song title with no artist.
+
+What changed
+------------
+The shared stream-title parser now recognizes these spaced separators:
+  Artist - Song
+  Artist – Song
+  Artist — Song
+
+It selects the earliest recognized separator and preserves the remainder of the song
+title, including any later hyphens or dashes. Titles without a recognized separator
+continue to be retained as a song title with an empty artist.
+
+What did not change
+-------------------
+- No ICY/Shoutcast timeout or interval limit changed.
+- No metadata request, cache, StationOnly, StationTransition, or publication policy
+  was changed.
+- No proxy, station file, library refresh, security, or WebLoader behavior changed.
+- No minification was performed. Readable source remains in the package.
+- The plugin GUID and configuration XML identity are unchanged.
+
+Suggested test
+--------------
+Build on the Windows Emby server and test a metadata-producing station that sends an
+en-dash or em-dash between artist and title (Affinity Radio is a useful candidate).
+Verify that the artist and song split correctly. Also test an ordinary "Artist - Song"
+station and a title with an additional dash later in the song title. Then verify station
+switching and OZFM's StationOnly behavior remain correct.
+
+Verification limitation
+----------------------
+Dashboard JavaScript syntax, source/bundle consistency, and package integrity can be
+checked statically. The C# project was not compiled here because the .NET SDK and the
+user's Emby build assemblies are unavailable in this environment.

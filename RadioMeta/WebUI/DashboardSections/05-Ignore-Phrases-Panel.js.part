@@ -1,0 +1,175 @@
+        function getRulePhrase(rule) {
+            return String(getValue(rule, 'Phrase', 'phrase') || '').trim();
+        }
+
+        function getRuleStation(rule) {
+            return String(getValue(rule, 'StationName', 'stationName') || '').trim();
+        }
+
+        function renderIgnoreRules() {
+            var container = view.querySelector('#radioIgnoreRules');
+            if (!container) {
+                return;
+            }
+
+            container.replaceChildren();
+
+            if (!ignoreRules.length) {
+                addText(container, 'radio-ignore-empty', 'No ignored phrases configured.');
+                return;
+            }
+
+            ignoreRules.forEach(function (rule, index) {
+                var phrase = getRulePhrase(rule);
+                var station = getRuleStation(rule);
+                var row = document.createElement('div');
+                row.className = 'radio-ignore-rule';
+
+                var text = document.createElement('div');
+                text.className = 'radio-ignore-rule-text';
+                addText(text, 'radio-ignore-rule-phrase', phrase, 'strong');
+                addText(
+                    text,
+                    'radio-ignore-rule-scope',
+                    station ? 'Station: ' + station : 'Applies to all stations'
+                );
+                row.appendChild(text);
+
+                var remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'emby-button raised radio-ignore-remove';
+                remove.textContent = 'Remove';
+                remove.setAttribute('data-ignore-index', String(index));
+                remove.setAttribute('aria-label', 'Remove ignore phrase ' + phrase);
+                row.appendChild(remove);
+                container.appendChild(row);
+            });
+        }
+
+        function loadIgnorePhrases() {
+            var status = view.querySelector('#radioIgnoreStatus');
+            if (!status || ignoreRequestInProgress) {
+                return;
+            }
+
+            ignoreRequestInProgress = true;
+            status.textContent = 'Loading ignore phrase settings...';
+
+            ApiClient.getJSON(ApiClient.getUrl('RadioMeta/IgnorePhrases'))
+                .then(function (data) {
+                    var error = getValue(data, 'Error', 'error');
+                    if (error) {
+                        status.textContent = error;
+                        return;
+                    }
+
+                    ignoreRules = getValue(data, 'Rules', 'rules') || [];
+                    renderIgnoreRules();
+                    status.textContent = ignoreRules.length
+                        ? ignoreRules.length + ' ignore phrase rule(s) configured.'
+                        : 'No ignore phrase rules configured.';
+                })
+                .catch(function (error) {
+                    status.textContent = 'Unable to load ignore phrase settings: ' +
+                        (error && error.message ? error.message : String(error));
+                    console.error('Radio Meta ignore phrases:', error);
+                })
+                .finally(function () {
+                    ignoreRequestInProgress = false;
+                });
+        }
+
+        function saveIgnoreRules(nextRules, successMessage, clearInputs) {
+            var status = view.querySelector('#radioIgnoreStatus');
+            var addButton = view.querySelector('#radioIgnoreAdd');
+            if (!status || ignoreSaveInProgress) {
+                return;
+            }
+
+            ignoreSaveInProgress = true;
+            if (addButton) {
+                addButton.disabled = true;
+            }
+            view.querySelectorAll('.radio-ignore-remove').forEach(function (button) {
+                button.disabled = true;
+            });
+            status.textContent = 'Saving ignore phrase settings...';
+
+            ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('RadioMeta/IgnorePhrases'),
+                data: JSON.stringify({ Rules: nextRules }),
+                contentType: 'application/json'
+            }).then(function (data) {
+                var error = getValue(data, 'Error', 'error');
+                if (error) {
+                    status.textContent = error;
+                    return;
+                }
+
+                ignoreRules = getValue(data, 'Rules', 'rules') || nextRules;
+                renderIgnoreRules();
+                status.textContent = successMessage ||
+                    getValue(data, 'Message', 'message') || 'Ignore phrase settings saved.';
+
+                if (clearInputs) {
+                    var phraseInput = view.querySelector('#radioIgnorePhrase');
+                    var stationInput = view.querySelector('#radioIgnoreStation');
+                    if (phraseInput) {
+                        phraseInput.value = '';
+                    }
+                    if (stationInput) {
+                        stationInput.value = '';
+                    }
+                }
+            }).catch(function (error) {
+                status.textContent = 'Unable to save ignore phrase settings: ' +
+                    (error && error.message ? error.message : String(error));
+                console.error('Radio Meta ignore phrase save:', error);
+            }).finally(function () {
+                ignoreSaveInProgress = false;
+                if (addButton) {
+                    addButton.disabled = false;
+                }
+                view.querySelectorAll('.radio-ignore-remove').forEach(function (button) {
+                    button.disabled = false;
+                });
+            });
+        }
+
+        function addIgnorePhrase() {
+            var phraseInput = view.querySelector('#radioIgnorePhrase');
+            var stationInput = view.querySelector('#radioIgnoreStation');
+            var status = view.querySelector('#radioIgnoreStatus');
+            if (!phraseInput || !stationInput || !status) {
+                return;
+            }
+
+            var phrase = phraseInput.value.trim();
+            var stationName = stationInput.value.trim();
+            if (!phrase) {
+                status.textContent = 'Enter a phrase before adding a rule.';
+                phraseInput.focus();
+                return;
+            }
+
+            var duplicate = ignoreRules.some(function (rule) {
+                return getRulePhrase(rule).toLowerCase() === phrase.toLowerCase() &&
+                    getRuleStation(rule).toLowerCase() === stationName.toLowerCase();
+            });
+            if (duplicate) {
+                status.textContent = 'That phrase rule already exists for the selected station scope.';
+                return;
+            }
+
+            if (ignoreRules.length >= 100) {
+                status.textContent = 'You have reached the limit of 100 ignore phrase rules.';
+                return;
+            }
+
+            saveIgnoreRules(ignoreRules.concat([{
+                StationName: stationName,
+                Phrase: phrase
+            }]), 'Ignore phrase added and saved.', true);
+        }
+

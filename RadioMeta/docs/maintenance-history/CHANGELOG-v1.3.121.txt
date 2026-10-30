@@ -1,0 +1,18 @@
+Radio Meta v1.3.121 — Artist Editor Based on Working v1.3.117
+
+BASELINE
+- Built from the v1.3.117 source package, preserving its existing dashboard controls, event delegation, station title-cleanup workflow, proxy files, metadata pipeline, and WebLoader integration.
+- Does not carry forward the station-wide ArtistTitleSplit experiment or its parser dependencies from v1.3.119/1.3.120.
+
+CHANGES
+- Adds the compact Play History editor fields “Artist found”, “Corrected artist”, “Title found”, and “Corrected song title”.
+- Keeps v1.3.117’s existing edit-button wiring and open/save event delegation; the edit interaction was not replaced with new click handlers.
+- Saves an exact station + incoming-title artist override with the existing exact title correction configuration.
+- Applies saved artist overrides to accepted current-track metadata, revalidates active tracks after a correction is saved, and reflects them in the inactive-station list view.
+- Updates both the history row’s artist and title on save, and persists both values in the history file.
+- Artist changes are song-specific. Existing station-wide suffix cleanup remains title-only; the UI blocks combining an artist change with the station-wide scope.
+- Preserves any existing artist override when a title-only correction is edited through the legacy saved-title-fixes API.
+
+VALIDATION
+- JavaScript syntax checks passed for the generated dashboard bundle and WebLoader nowplayingbar script; the dashboard bundle matches the 15 ordered source sections.
+- A .NET build and live Emby test have not been run in this Linux environment because the .NET SDK and Emby assemblies are unavailable here. Please build on the Windows Emby host before installing.

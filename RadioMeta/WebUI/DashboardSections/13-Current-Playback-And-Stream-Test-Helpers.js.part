@@ -1,0 +1,227 @@
+        function resolveCurrentPlaybackInfoStation() {
+            if (!ApiClient || typeof ApiClient.getSessions !== 'function' ||
+                typeof ApiClient.getPlaybackInfo !== 'function') {
+                return Promise.resolve(null);
+            }
+
+            function apiValue(name) {
+                try {
+                    var value = ApiClient[name];
+                    return typeof value === 'function' ? value.call(ApiClient) : value;
+                } catch (ignore) { return null; }
+            }
+
+            function isExternalStreamUrl(value) {
+                if (typeof value !== 'string' || !value.trim()) return '';
+                try {
+                    var parsed = new URL(value.trim(), window.location.href);
+                    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+                    if (parsed.username || parsed.password) return '';
+
+                    // Reject Emby-internal playback URLs: they normally require the
+                    // logged-in user's session and are not portable .strm URLs.
+                    if (/^\/(?:emby\/)?(?:Audio|Videos?|Items|LiveTv|PlaybackInfo|Sessions)\//i.test(parsed.pathname)) return '';
+                    var embyHost = '';
+                    try {
+                        var serverAddress = apiValue('serverAddress');
+                        if (!serverAddress && typeof ApiClient.getUrl === 'function') serverAddress = ApiClient.getUrl('');
+                        if (serverAddress) embyHost = new URL(serverAddress, window.location.href).host.toLowerCase();
+                    } catch (ignore) { }
+                    if (embyHost && parsed.host.toLowerCase() === embyHost && /^\/(?:emby\/)?(?:Audio|Videos?|Items|LiveTv|PlaybackInfo|Sessions)\//i.test(parsed.pathname)) return '';
+
+                    // Never persist an Emby API/auth token into a .strm URL. Other
+                    // provider-specific query values (e.g. TuneIn partnertok) are
+                    // retained because the provider may require them to play.
+                    var sensitiveEmbyKeys = ['api_key', 'apikey', 'x-emby-token', 'access_token', 'authorization'];
+                    var hasEmbyCredential = false;
+                    parsed.searchParams.forEach(function (_, key) {
+                        if (sensitiveEmbyKeys.indexOf(String(key).toLowerCase()) >= 0) hasEmbyCredential = true;
+                    });
+                    if (hasEmbyCredential) return '';
+                    return parsed.href;
+                } catch (ignore) { return ''; }
+            }
+
+            return ApiClient.getSessions().then(function (sessions) {
+                if (!Array.isArray(sessions)) return null;
+                var currentUserId = apiValue('getCurrentUserId');
+                var currentDeviceId = apiValue('deviceId');
+                if (!currentDeviceId) currentDeviceId = apiValue('getDeviceId');
+                var candidates = sessions.filter(function (session) {
+                    var item = session && session.NowPlayingItem;
+                    if (!item || !item.Id) return false;
+                    var mediaType = String(item.MediaType || item.Type || '').toLowerCase();
+                    return mediaType === 'audio';
+                });
+                if (currentUserId) {
+                    var sameUser = candidates.filter(function (session) {
+                        return String(session.UserId || '') === String(currentUserId);
+                    });
+                    if (sameUser.length) candidates = sameUser;
+                }
+                if (currentDeviceId) {
+                    var sameDevice = candidates.filter(function (session) {
+                        return String(session.DeviceId || '') === String(currentDeviceId);
+                    });
+                    if (sameDevice.length) candidates = sameDevice;
+                }
+                if (!candidates.length) return null;
+                var session = candidates[0];
+                var item = session.NowPlayingItem;
+                var options = {};
+                if (currentUserId) options.UserId = currentUserId;
+
+                return ApiClient.getPlaybackInfo(item.Id, options).then(function (info) {
+                    if (!info || typeof info !== 'object') return null;
+                    var mediaSources = getValue(info, 'MediaSources', 'mediaSources');
+                    if (!Array.isArray(mediaSources)) {
+                        var singleSource = getValue(info, 'MediaSource', 'mediaSource');
+                        mediaSources = singleSource ? [singleSource] : [];
+                    }
+                    mediaSources = mediaSources.slice().sort(function (a, b) {
+                        return (getValue(b, 'IsInfiniteStream', 'isInfiniteStream') === true ? 1 : 0) -
+                            (getValue(a, 'IsInfiniteStream', 'isInfiniteStream') === true ? 1 : 0);
+                    });
+
+                    var streamUrl = '';
+                    for (var i = 0; i < mediaSources.length && !streamUrl; i++) {
+                        var source = mediaSources[i];
+                        var sourceCandidates = [
+                            getValue(source, 'DirectStreamUrl', 'directStreamUrl'),
+                            getValue(source, 'Path', 'path'),
+                            getValue(source, 'ResolvedUrl', 'resolvedUrl'),
+                            getValue(source, 'Url', 'url'),
+                            getValue(source, 'Uri', 'uri')
+                        ];
+                        for (var j = 0; j < sourceCandidates.length; j++) {
+                            streamUrl = isExternalStreamUrl(sourceCandidates[j]);
+                            if (streamUrl) break;
+                        }
+                    }
+                    if (!streamUrl) return null;
+
+                    var name = String(item.Name || '').trim();
+                    if (!name) name = String(info.Name || info.name || '').trim();
+                    if (!name) return null;
+                    return {
+                        Available: true,
+                        Name: name,
+                        StreamUrl: streamUrl,
+                        ArtworkUrl: '',
+                        ItemId: String(item.Id || ''),
+                        Source: 'Emby playback information',
+                        Message: 'Resolved the external stream URL from Emby playback information. Review the station details before creating the .strm file.'
+                    };
+                });
+            }).catch(function () {
+                // Best-effort fallback. Do not log playback URLs, since provider URLs
+                // may contain partner credentials or signed query values.
+                return null;
+            });
+        }
+
+        function setCurrentStreamTestResult(state, message, detail) {
+            var result = view.querySelector('#radioStationStreamTestResult');
+            if (!result) return;
+            result.setAttribute('data-state', state || 'idle');
+            result.textContent = message || '';
+            result.title = detail || message || '';
+        }
+
+        function normalizeCurrentStreamTestResponse(value) {
+            function parse(valueToParse) {
+                if (typeof valueToParse !== 'string') return valueToParse;
+                try { return JSON.parse(valueToParse); } catch (ignore) { return valueToParse; }
+            }
+            var payload = parse(value);
+            if (payload && typeof payload === 'object') {
+                if (payload.responseJSON !== undefined) payload = parse(payload.responseJSON);
+                else if (payload.responseText !== undefined) payload = parse(payload.responseText);
+                else if (payload.body !== undefined && typeof payload.body === 'string') payload = parse(payload.body);
+            }
+            var envelopes = ['Response', 'response', 'Result', 'result', 'd', 'Data', 'data', 'Body', 'body'];
+            function isTestResponse(item) {
+                return !!item && typeof item === 'object' &&
+                    (item.MetadataDetected !== undefined || item.metadataDetected !== undefined ||
+                     item.Available !== undefined || item.available !== undefined);
+            }
+            for (var depth = 0; depth < 5 && !isTestResponse(payload); depth++) {
+                var nested = null;
+                for (var i = 0; payload && typeof payload === 'object' && i < envelopes.length; i++) {
+                    var candidate = parse(payload[envelopes[i]]);
+                    if (isTestResponse(candidate)) { nested = candidate; break; }
+                    if (!nested && candidate && typeof candidate === 'object' && envelopes.some(function (key) { return candidate[key] !== undefined; })) nested = candidate;
+                }
+                if (!nested) break;
+                payload = nested;
+            }
+            return payload;
+        }
+
+        function testCurrentStreamMetadata(stationName, resolvedStreamUrl) {
+            var name = String(stationName || '').trim();
+            var streamUrl = String(resolvedStreamUrl || '').trim();
+            if (!name) {
+                setCurrentStreamTestResult('empty', 'No metadata detected · station name unavailable.', 'Radio Meta could not identify the current station.');
+                return;
+            }
+
+            setCurrentStreamTestResult('checking', 'Checking stream for metadata… (up to 30 seconds)', 'Read-only test with one shared 30-second timeout. FFprobe is not launched and Ignore Metadata Phrases is not applied to this preview.');
+            // POST keeps potentially signed stream URLs out of the request URL/query string.
+            // The server independently validates that the candidate is a public stream URL.
+            ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('RadioMeta/Stations/TestCurrentStreamMetadata'),
+                data: JSON.stringify({ StationName: name, StreamUrl: streamUrl }),
+                contentType: 'application/json',
+                dataType: 'json'
+            }).then(function (value) {
+                    if (value && typeof value.json === 'function') return value.json();
+                    return value;
+                }).then(function (value) {
+                    var data = normalizeCurrentStreamTestResponse(value);
+                    if (!data || typeof data !== 'object') throw new Error('The metadata test returned an unreadable response.');
+
+                    var available = getValue(data, 'Available', 'available') === true;
+                    var detected = getValue(data, 'MetadataDetected', 'metadataDetected') === true;
+                    var artist = String(getValue(data, 'Artist', 'artist') || '').trim();
+                    var song = String(getValue(data, 'SongTitle', 'songTitle') || '').trim();
+                    var rawTitle = String(getValue(data, 'StreamTitle', 'streamTitle') || '').trim();
+                    var source = String(getValue(data, 'Source', 'source') || '').trim();
+                    var detail = String(getValue(data, 'Message', 'message') || '').trim();
+                    var durationMs = Number(getValue(data, 'ElapsedMilliseconds', 'elapsedMilliseconds') || 0);
+                    var duration = durationMs > 0 ? (durationMs / 1000).toFixed(1) + ' s' : '';
+
+                    if (detected) {
+                        var titleText = artist && song ? artist + ' — ' + song : (song || rawTitle);
+                        if (!artist) titleText += ' · artist not supplied';
+                        var foundMessage = titleText + (source ? ' · ' + source : '') + (duration ? ' · ' + duration : '');
+                        setCurrentStreamTestResult('found', foundMessage, detail || foundMessage);
+                        return;
+                    }
+
+                    var emptyMessage = 'No metadata detected';
+                    if (!available) {
+                        // Distinguish a test that never started from a completed
+                        // 30-second lookup that found no usable station metadata.
+                        emptyMessage = /url|stream|test not started|safety|public/i.test(detail)
+                            ? 'Test not started · stream URL unavailable'
+                            : 'Test not started · current station unavailable';
+                        setCurrentStreamTestResult('error', emptyMessage, detail || 'The metadata test did not start because no valid active stream URL was available.');
+                    } else {
+                        if (detail && /timed?\s*out|timeout/i.test(detail)) {
+                            emptyMessage = 'No metadata detected within 30 seconds';
+                            if (duration) emptyMessage += ' · ' + duration;
+                        } else if (duration) {
+                            emptyMessage += ' · ' + duration;
+                        }
+                        setCurrentStreamTestResult('empty', emptyMessage, detail || 'The stream did not provide a usable song title during this one-shot test.');
+                    }
+                })
+                .catch(function (error) {
+                    var detail = error && error.message ? error.message : 'The metadata test request failed.';
+                    setCurrentStreamTestResult('error', 'Stream metadata test unavailable.', detail);
+                    console.warn('Radio Meta stream metadata test:', error);
+                });
+        }
+

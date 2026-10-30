@@ -1,0 +1,33 @@
+RADIO META v1.3.112 — DASHBOARD / DOCUMENTATION HOUSEKEEPING
+============================================================
+
+Purpose
+-------
+This is a low-risk organization and documentation step before any minification.
+
+Changes
+-------
+- Added START-HERE.txt for users who want a plain-language entry point.
+- Reorganized README.txt around building, testing, diagnostics, and the proxy guides.
+- Moved older release-specific cleanup notes and the v1.3.98 hardening memo under RadioMeta/docs/maintenance-history.
+- Removed the old v1.3.98 version from the proxy walkthrough's title; its contents still describe the implementation and limitations.
+- Updated the project/dashboard release marker to 1.3.112 and regenerated the dashboard bundle from the same 15 readable source sections.
+
+Intentionally unchanged
+-----------------------
+- No dashboard behavior, styling, station form, metadata lookup, display logic, proxy behavior, or StationOnly behavior was changed.
+- The stream-capture paste-import remains in place; its source comments still mark it as experimental. No UI elements were deleted because the review did not establish any one as safely unused.
+- WebLoader and every file in WebLoader are byte-for-byte unchanged, including NOWPLAYINGBAR-CHANGES.txt. No stock nowplayingbar.js change was made.
+- Plugin GUID and configuration XML filename are unchanged.
+- No minification or .NET trimming was performed.
+
+Verification performed
+----------------------
+- The dashboard generated from all 15 source sections matches the packaged generated bundle.
+- JavaScript syntax checks were run on packaged JavaScript source files.
+- WebLoader file hashes were compared with the v1.3.111 baseline.
+- ZIP integrity and the source SHA256 manifest were verified.
+
+Limits
+------
+This was a source/documentation and version-marker review, not a C# build or live Emby runtime test. Build on Windows and perform the README checklist before treating the package as verified.

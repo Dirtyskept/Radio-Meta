@@ -1,7 +1,7 @@
 <div id="RadioMetaDashboard"
      data-role="page"
      class="page type-interior pluginConfigurationPage page-windowScroll"
-     data-controller="__plugin/RadioMetaDashboard-v16.js">
+     data-controller="__plugin/RadioMetaDashboard.js">
 
     <div class="content-primary">
         <div id="radioHistoryToolbar">
@@ -36,6 +36,10 @@
                     </div>
                     <div class="radio-station-create-primary-row">
                         <button id="radioStationCreateButton" type="button" class="emby-button raised button-submit"><span>Create .strm</span></button>
+                        <label for="radioStationCreateUseProxy" class="radio-station-create-proxy-option" style="display:inline-flex;align-items:center;gap:.45em;margin-left:.8em;">
+                            <input id="radioStationCreateUseProxy" type="checkbox" />
+                            <span>Use proxy</span>
+                        </label>
                         <span class="radio-station-create-help">Creates the station file using the fields above.</span>
                     </div>
                     <div class="radio-station-folder-row">
@@ -43,7 +47,7 @@
                             <span class="radio-station-folder-shortcut-label">Station folder</span>
                             <span id="radioStationFolderDisplay" class="radio-station-folder-shortcut-value" title="">Loading...</span>
                         </div>
-                        <button id="radioStationFolderChange" type="button" class="emby-button radio-station-folder-change" title="Change the station folder">Change</button>
+                        <button id="radioStationFolderChange" type="button" class="emby-button raised radio-station-folder-change" title="Change the station folder">Change</button>
                     </div>
                 </div>
                 <div class="radio-station-scan-intro-row">
@@ -87,7 +91,7 @@
         <section id="radioStationModeSection" aria-labelledby="radioStationModeHeading">
             <h2 id="radioStationModeHeading">Station Metadata Settings</h2>
             <p>
-                Enter an exact .strm title to target one station, or an exact Emby device name (for example, <strong>Safari iOS</strong>) to target every station playing on that device. Station-specific rules take priority over device-wide rules. <strong>Carplay</strong> clears old song metadata when the station changes; the delay waits until the song/artist stays unchanged for the selected time (0 = off).
+                Enter an exact .strm title to target one station, or an exact Emby device name (for example, <strong>Safari iOS</strong>) to target every station playing on that device. Station-specific rules take priority over device-wide rules. <strong>Station delay</strong> shows the first valid current song immediately when you tune in, then waits for the configured delay before publishing later song/artist changes. <strong>Disable metadata</strong> skips song lookups. <strong>Carplay</strong> keeps its existing device-specific station-change behavior. Delay 0 means off.
             </p>
 
             <div id="radioStationModeForm">
@@ -100,7 +104,8 @@
                     <label for="radioStationModeValue">Metadata mode</label>
                     <select id="radioStationModeValue" class="emby-select">
                         <option value="Automatic">Automatic</option>
-                        <option value="StationOnly">Station only</option>
+                        <option value="StationDelay">Station delay (current song immediately, delay later changes)</option>
+                        <option value="StationOnly">Disable metadata (StationOnly)</option>
                         <option value="Carplay">Carplay</option>
                     </select>
                 </div>
@@ -156,8 +161,8 @@
 
 
         <section id="radioPathSettingsSection" aria-labelledby="radioPathSettingsHeading">
-            <h2 id="radioPathSettingsHeading">Station Folder &amp; FFprobe</h2>
-            <p>Configure where Radio Meta finds station files and which FFprobe executable it uses. Changes are saved to the plugin configuration.</p>
+            <h2 id="radioPathSettingsHeading">Station Folder, FFprobe &amp; Adaptive Routing</h2>
+            <p>Configure station-file detection and FFprobe. The adaptive routing option controls whether Radio Meta learns a preferred metadata source per station or keeps Shoutcast and direct ICY in parallel. Changes are saved to the plugin configuration.</p>
 
             <div id="radioPathSettingsForm">
                 <div class="radio-path-field">
@@ -171,6 +176,14 @@
                     <input id="radioFfprobePath" class="emby-input" type="text" maxlength="1024"
                            autocomplete="off" placeholder="%APPDATA%\Emby-Server\system\ffprobe.exe" />
                     <div class="radio-path-help">Path to ffprobe.exe. Leave blank to search Windows PATH. Environment variables such as %APPDATA% are supported.</div>
+                </div>
+                <div class="radio-path-field radio-path-adaptive-field">
+                    <label for="radioAdaptiveMetadataRouting">Adaptive metadata routing</label>
+                    <label class="radio-path-checkbox-line" for="radioAdaptiveMetadataRouting">
+                        <input id="radioAdaptiveMetadataRouting" type="checkbox" checked />
+                        <span>Learn per station when one source wins four consecutive parallel races. Clear this to restore parallel Shoutcast + direct ICY lookup for every uncached request.</span>
+                    </label>
+                    <div class="radio-path-help">Station preferences and recheck progress persist across Emby restarts. Preferred sources are periodically rechecked in parallel and fall back if they stop producing a usable title.</div>
                 </div>
                 <button id="radioPathSettingsSave" type="button" class="emby-button raised button-submit">
                     <span>Save Path</span>
@@ -244,6 +257,9 @@
             #radioStationScanResults { display: grid; gap: 6px; max-width: 900px; min-width: 0; }
             .radio-station-scan-row { display: flex; align-items: flex-start; gap: 12px; min-width: 0; border: 1px solid rgba(128,128,128,.3); border-radius: 6px; padding: 8px 10px; }
             .radio-station-scan-logo { flex: 0 0 64px; width: 64px; height: 64px; object-fit: contain; border-radius: 4px; }
+            .radio-station-artwork-link { display: inline-flex; flex: 0 0 64px; width: 64px; height: 64px; align-items: center; justify-content: center; text-decoration: none; cursor: pointer; }
+            .radio-station-artwork-link:focus-visible { outline: 2px solid var(--theme-primary-color, currentColor); outline-offset: 2px; border-radius: 5px; }
+            .radio-station-artwork-link:hover .radio-station-scan-logo { transform: scale(1.04); }
             .radio-station-scan-content { flex: 1 1 auto; min-width: 0; }
             .radio-station-scan-row > button { flex: 0 0 auto; }
             .radio-station-edit {
@@ -437,6 +453,10 @@
                 min-width: 0;
                 padding: 9px 10px;
             }
+            .radio-path-adaptive-field { align-self: stretch; }
+            .radio-path-checkbox-line { display: flex; align-items: flex-start; gap: 8px; font-weight: normal; line-height: 1.35; }
+            .radio-path-checkbox-line input[type="checkbox"] { flex: 0 0 auto; width: auto; min-width: 0; margin: 3px 0 0; padding: 0; }
+            .radio-path-checkbox-line span { font-size: .9em; }
 
             #radioStationModeRules,
             #radioIgnoreRules,
@@ -1097,6 +1117,36 @@
                 #RadioMetaDashboard #radioStationFolderChange {
                     align-self: flex-start !important;
                 }
+            }
+
+            /* Keep the adaptive-routing checkbox readable despite the global form-input overrides above. */
+            #RadioMetaDashboard .radio-path-checkbox-line {
+                display: flex !important;
+                align-items: flex-start !important;
+                justify-content: flex-start !important;
+                gap: 8px !important;
+                white-space: normal !important;
+                line-height: 1.35 !important;
+                font-weight: normal !important;
+            }
+            #RadioMetaDashboard .radio-path-checkbox-line input[type="checkbox"] {
+                display: inline-block !important;
+                grid-row: auto !important;
+                justify-self: start !important;
+                align-self: flex-start !important;
+                flex: 0 0 auto !important;
+                width: auto !important;
+                min-width: 0 !important;
+                height: auto !important;
+                margin: 3px 0 0 !important;
+                padding: 0 !important;
+                white-space: normal !important;
+            }
+            #RadioMetaDashboard .radio-path-checkbox-line span {
+                display: inline-block !important;
+                min-width: 0 !important;
+                white-space: normal !important;
+                overflow-wrap: anywhere !important;
             }
 
 </style>

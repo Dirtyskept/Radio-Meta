@@ -1,0 +1,7 @@
+MAINLINE PROMOTION — RADIO META v1.3.125
+
+The previous 1.3 mainline source was v1.3.124 (parallel Shoutcast/direct ICY reader). The subsequent 1.7 work was developed from that source as a separate test line. Once the station-switch/CarPlay behavior and persistent adaptive routing were accepted for promotion, the tested v1.7.14 implementation became the release source for v1.3.125.
+
+This was intentionally a version-line promotion rather than a manual source-to-source merge, because the 1.3 line had not continued independently during the 1.7 work. The v1.7 development changelogs are retained in this maintenance-history folder for traceability.
+
+The plugin GUID and main configuration XML schema/name remain unchanged. The new adaptive-routing state is kept in a separate XML file beside the existing plugin configuration.

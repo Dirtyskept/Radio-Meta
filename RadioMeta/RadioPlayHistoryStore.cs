@@ -1,8 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text;
 using MediaBrowser.Model.Logging;
 
 namespace RadioMeta;
@@ -29,6 +30,7 @@ public sealed class RadioPlayedItem
 public sealed class RadioPlayHistoryStore
 {
     public const int MaximumItems = 200;
+    private const long MaximumHistoryFileBytes = 40L * 1024 * 1024;
 
     private static readonly TimeSpan DuplicateWindow = TimeSpan.FromMinutes(2);
 
@@ -94,10 +96,10 @@ public sealed class RadioPlayHistoryStore
         string songTitle,
         string? originalSongTitle = null)
     {
-        stationName = (stationName ?? string.Empty).Trim();
-        artist = (artist ?? string.Empty).Trim();
-        songTitle = (songTitle ?? string.Empty).Trim();
-        originalSongTitle = (string.IsNullOrWhiteSpace(originalSongTitle) ? songTitle : originalSongTitle).Trim();
+        stationName = Limit((stationName ?? string.Empty).Trim(), 160);
+        artist = Limit((artist ?? string.Empty).Trim(), 300);
+        songTitle = Limit((songTitle ?? string.Empty).Trim(), 300);
+        originalSongTitle = Limit((string.IsNullOrWhiteSpace(originalSongTitle) ? songTitle : originalSongTitle).Trim(), 300);
 
         if (stationName.Length == 0 ||
             (artist.Length == 0 && songTitle.Length == 0))
@@ -197,6 +199,51 @@ public sealed class RadioPlayHistoryStore
         }
     }
 
+    /// <summary>Updates the displayed artist and title of one history entry atomically.</summary>
+    public bool UpdateSongMetadata(Guid id, string correctedArtist, string correctedTitle, out string previousArtist, out string previousTitle, out string error)
+    {
+        previousArtist = string.Empty;
+        previousTitle = string.Empty;
+        error = string.Empty;
+        correctedArtist = Limit((correctedArtist ?? string.Empty).Trim(), 300);
+        correctedTitle = (correctedTitle ?? string.Empty).Trim();
+        if (id == Guid.Empty || correctedTitle.Length == 0 || correctedTitle.Length > 300)
+        {
+            error = "A valid history entry and corrected title are required (1–300 characters).";
+            return false;
+        }
+
+        lock (_gate)
+        {
+            var item = _items.FirstOrDefault(candidate => candidate.Id == id);
+            if (item is null)
+            {
+                error = "That history entry no longer exists. Refresh the page and try again.";
+                return false;
+            }
+
+            previousArtist = item.Artist;
+            previousTitle = item.SongTitle;
+            var previousOriginalTitle = item.OriginalSongTitle;
+            if (string.IsNullOrWhiteSpace(item.OriginalSongTitle))
+            {
+                item.OriginalSongTitle = item.SongTitle;
+            }
+            item.Artist = correctedArtist;
+            item.SongTitle = correctedTitle;
+            if (Save())
+            {
+                return true;
+            }
+
+            item.Artist = previousArtist;
+            item.SongTitle = previousTitle;
+            item.OriginalSongTitle = previousOriginalTitle;
+            error = "The corrected artist/title could not be saved to history. Check plugin configuration-folder permissions.";
+            return false;
+        }
+    }
+
     /// <summary>Removes one history entry by its stable identifier.</summary>
     public bool Remove(Guid id, out string error)
     {
@@ -263,7 +310,9 @@ public sealed class RadioPlayHistoryStore
             {
                 if (File.Exists(_filePath))
                 {
-                    var json = File.ReadAllText(_filePath);
+                    if (!RadioStationFileStore.TryReadCappedFile(_filePath, MaximumHistoryFileBytes, out var bytes))
+                        throw new InvalidDataException("History file is empty or exceeds the 40 MB safety limit.");
+                    var json = Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
                     var saved = JsonSerializer.Deserialize<List<RadioPlayedItem>>(
                         json, JsonOptions);
 
@@ -363,6 +412,9 @@ public sealed class RadioPlayHistoryStore
             return false;
         }
     }
+
+    private static string Limit(string value, int maximumLength)
+        => value.Length <= maximumLength ? value : value[..maximumLength];
 
     private static RadioPlayedItem Clone(RadioPlayedItem item) => new()
     {

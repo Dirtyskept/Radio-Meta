@@ -1,0 +1,44 @@
+RADIO META v1.3.116 — ICY QUOTED-FIELD AND ENCODING FIX
+======================================================
+
+Why this change was made
+------------------------
+A raw ICY capture from Affinity Radio proved the station sent the full field:
+    StreamTitle='Randy Crawford - One Day I'll Fly Away';
+Emby showed the title as "One Day I". The old parser used the first matching quote as
+its closing delimiter and therefore mistook the apostrophe in "I'll" for the end of
+the StreamTitle field.
+
+Changes
+-------
+- Quoted StreamTitle fields now terminate at the matching quote followed by a
+  semicolon (allowing whitespace before the semicolon), rather than the first quote.
+- If a malformed field lacks a quote-semicolon terminator, the fallback avoids
+  truncating at the first internal apostrophe.
+- The ICY metadata block is decoded as strict UTF-8 when valid; if decoding fails,
+  the reader falls back to the previous Latin-1 decoding for legacy streams.
+- Word-internal U+00B4 SPACING ACUTE characters between letters/digits normalize to
+  an ordinary ASCII apostrophe. This addresses the captured "Gravity´s" title and
+  the "GravityÂ´s" appearance caused by interpreting UTF-8 bytes as Latin-1.
+- The fix uses the existing parser and metadata path. It does not add network
+  requests or alter lookup timeouts, cache TTLs, or the 40-interval limit.
+
+Focused examples
+----------------
+Input ICY field: StreamTitle='Randy Crawford - One Day I'll Fly Away';
+Expected artist: Randy Crawford
+Expected song title: One Day I'll Fly Away
+
+Input ICY field: StreamTitle='Matt Monro - Let's Face the Music and Dance';
+Expected song title: Let's Face the Music and Dance
+
+Input UTF-8 metadata title: liquidfive x GREATOREX - Gravity´s Losing Me (Original Mix)
+Expected normalized title: liquidfive x GREATOREX - Gravity's Losing Me (Original Mix)
+
+Verification limits
+-------------------
+The raw-capture examples and updated parser were reviewed against the source. The
+C# project was not compiled here because the .NET SDK and Emby assemblies are not
+available in this environment. Build on Windows and test with the reported Affinity
+Radio title before replacing a working installation. JavaScript checks, source
+manifest, ZIP integrity, and bundle/source consistency are checked for this package.

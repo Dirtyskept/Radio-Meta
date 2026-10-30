@@ -1,0 +1,414 @@
+        function scanStationFolder(completionNote, stationOperationData) {
+            function withCompletionNote(message) {
+                return completionNote ? message + ' ' + completionNote : message;
+            }
+            var button = view.querySelector('#radioStationScanButton');
+            var status = view.querySelector('#radioStationScanStatus');
+            var container = view.querySelector('#radioStationScanResults');
+            if (stationScanInProgress || !button || !status || !container) {
+                reportStationOperationResult(stationOperationData, {
+                    stationListRefreshStatus: stationScanInProgress ? 'not-run-busy' : 'not-started'
+                });
+                return;
+            }
+
+            var scrollSnapshot = captureRadioMetaScrollPosition();
+            stationScanInProgress = true;
+            status.textContent = withCompletionNote('Scanning configured Station Folder...');
+            container.replaceChildren();
+
+            ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('RadioMeta/Stations/Scan'),
+                data: JSON.stringify({ IncludeSubfolders: false }),
+                contentType: 'application/json',
+                dataType: 'json'
+            }).then(function (data) {
+                // Some fetch-backed clients resolve to a Fetch Response rather
+                // than the decoded body. Read that body before inspecting fields.
+                if (data && typeof data.json === 'function') {
+                    return data.json();
+                }
+                return data;
+            }).then(function (data) {
+                // Emby's fetch helper can expose JSON as a DTO, a JSON string,
+                // or an XHR-like object. Normalize those forms before reading
+                // the scan response, then walk known envelopes (not just one
+                // level) until the actual scan DTO is found.
+                function parseJson(value) {
+                    if (typeof value !== 'string') return value;
+                    try { return JSON.parse(value); } catch (ignore) { return value; }
+                }
+                var payload = parseJson(data);
+                if (payload && typeof payload === 'object') {
+                    if (payload.responseJSON !== undefined) payload = parseJson(payload.responseJSON);
+                    else if (payload.responseText !== undefined) payload = parseJson(payload.responseText);
+                    else if (payload.body !== undefined && typeof payload.body === 'string') payload = parseJson(payload.body);
+                }
+                var envelopeNames = ['Response', 'response', 'Result', 'result', 'd', 'Data', 'data', 'Body', 'body'];
+                function isScanDto(value) {
+                    return !!value && typeof value === 'object' &&
+                        (value.Stations !== undefined || value.stations !== undefined ||
+                         value.ScannedFiles !== undefined || value.scannedFiles !== undefined ||
+                         value.ConfiguredFolder !== undefined || value.configuredFolder !== undefined ||
+                         value.Folder !== undefined || value.folder !== undefined ||
+                         value.Error !== undefined || value.error !== undefined);
+                }
+                // Do not stop at the first object-valued envelope: some Emby
+                // client wrappers expose an empty `data` object alongside the
+                // actual DTO under `Response`/`responseJSON`. Prefer a candidate
+                // that is itself the scan DTO; otherwise continue only through
+                // a wrapper that contains another recognized envelope.
+                for (var depth = 0; depth < 6 && !isScanDto(payload); depth++) {
+                    var next = null;
+                    for (var i = 0; payload && typeof payload === 'object' && i < envelopeNames.length; i++) {
+                        var candidate = parseJson(payload[envelopeNames[i]]);
+                        if (!candidate || typeof candidate !== 'object') continue;
+                        if (isScanDto(candidate)) {
+                            next = candidate;
+                            break;
+                        }
+                        var hasNestedEnvelope = envelopeNames.some(function (name) {
+                            var nested = candidate[name];
+                            return nested !== undefined && nested !== null &&
+                                (typeof nested === 'object' || typeof nested === 'string');
+                        });
+                        if (!next && hasNestedEnvelope) next = candidate;
+                    }
+                    if (!next) break;
+                    payload = next;
+                }
+                if (!isScanDto(payload)) {
+                    var shape = payload && typeof payload === 'object' ? Object.keys(payload).join(', ') : typeof payload;
+                    var detail = payload && typeof payload === 'object' && payload.constructor ? payload.constructor.name : typeof payload;
+                    status.textContent = withCompletionNote('Station scan returned an unexpected response format (' + shape + '; ' + detail + '). The server scan itself may have succeeded; no station files were changed.');
+                    console.error('Radio Meta station scan response format:', { original: data, normalized: payload });
+                    reportStationOperationResult(stationOperationData, { stationListRefreshStatus: 'unexpected-response' });
+                    return;
+                }
+                var error = getValue(payload, 'Error', 'error');
+                if (error) {
+                    var configuredErrorPath = getValue(payload, 'ConfiguredFolder', 'configuredFolder');
+                    var resolvedErrorPath = getValue(payload, 'Folder', 'folder');
+                    status.textContent = withCompletionNote(error +
+                        (configuredErrorPath ? ' Configured path: ' + configuredErrorPath + '.' : '') +
+                        (resolvedErrorPath ? ' Resolved path: ' + resolvedErrorPath + '.' : ''));
+                    reportStationOperationResult(stationOperationData, { stationListRefreshStatus: 'failed' });
+                    return;
+                }
+                var stations = getValue(payload, 'Stations', 'stations') || [];
+                var scannedFiles = Number(getValue(payload, 'ScannedFiles', 'scannedFiles')) || 0;
+                var folder = getValue(payload, 'Folder', 'folder') || '(server returned no resolved folder)';
+                var configuredFolder = getValue(payload, 'ConfiguredFolder', 'configuredFolder') || '';
+                var directoriesExamined = Number(getValue(payload, 'DirectoriesExamined', 'directoriesExamined')) || 0;
+                var directoryErrors = Number(getValue(payload, 'DirectoryErrors', 'directoryErrors')) || 0;
+                if (!stations.length) {
+                    status.textContent = withCompletionNote('Scan returned zero stations. Configured path: ' + (configuredFolder || '(not returned)') + '; resolved path: ' + folder + '; directories examined: ' + directoriesExamined + '; .strm files found: ' + scannedFiles + '; directory errors: ' + directoryErrors + '. If the paths are missing, refresh the plugin page and verify the installed DLL and embedded resources match.');
+                    reportStationOperationResult(stationOperationData, { stationListRefreshStatus: 'completed-zero-stations' });
+                    return;
+                }
+
+                stations.forEach(function (station) {
+                    var row = document.createElement('div');
+                    row.className = 'radio-station-scan-row';
+                    var stationDisplayName = String(getValue(station, 'Name', 'name') || '(unnamed station)');
+                    var embyItemId = String(getValue(station, 'EmbyItemId', 'embyItemId') || '').trim();
+                    var artworkDataUri = getValue(station, 'ArtworkDataUri', 'artworkDataUri') || '';
+                    if (artworkDataUri) {
+                        var logo = document.createElement('img');
+                        logo.className = 'radio-station-scan-logo';
+                        logo.alt = '';
+                        logo.loading = 'lazy';
+                        logo.src = artworkDataUri;
+                        if (embyItemId) {
+                            var stationLink = document.createElement('a');
+                            stationLink.className = 'radio-station-artwork-link';
+                            var serverId = ApiClient && typeof ApiClient.serverId === 'function' ? String(ApiClient.serverId() || '') : '';
+                            stationLink.href = window.location.href.split('#')[0] + '#!/item?id=' + encodeURIComponent(embyItemId) +
+                                (serverId ? '&serverId=' + encodeURIComponent(serverId) : '');
+                            stationLink.title = 'Open ' + stationDisplayName + ' in Emby';
+                            stationLink.setAttribute('aria-label', 'Open ' + stationDisplayName + ' in Emby');
+                            stationLink.appendChild(logo);
+                            row.appendChild(stationLink);
+                        } else {
+                            logo.title = 'This station is not currently indexed as an Emby library item.';
+                            row.appendChild(logo);
+                        }
+                    } else {
+                        var placeholder = document.createElement('div');
+                        placeholder.className = 'radio-station-scan-logo-placeholder';
+                        placeholder.setAttribute('aria-hidden', 'true');
+                        placeholder.textContent = '♫';
+                        row.appendChild(placeholder);
+                    }
+                    var content = document.createElement('div');
+                    content.className = 'radio-station-scan-content';
+                    var name = document.createElement('div');
+                    name.className = 'radio-station-scan-name';
+                    name.textContent = stationDisplayName;
+                    content.appendChild(name);
+
+                    var streamStatus = getValue(station, 'StreamStatus', 'streamStatus') || 'Unknown';
+                    var artworkStatus = getValue(station, 'ArtworkStatus', 'artworkStatus') || 'Unknown';
+                    var meta = document.createElement('div');
+                    meta.className = 'radio-station-scan-meta';
+                    meta.textContent = 'Stream: ' + streamStatus + ' · Artwork: ' + artworkStatus;
+                    content.appendChild(meta);
+
+                    var streamUrl = getValue(station, 'StreamUrl', 'streamUrl') || '';
+                    var url = document.createElement('div');
+                    url.className = 'radio-station-scan-url';
+                    url.textContent = streamUrl || '(no stream URL could be read)';
+                    content.appendChild(url);
+
+                    row.appendChild(content);
+                    var editButton = document.createElement('button');
+                    editButton.type = 'button';
+                    editButton.className = 'emby-button raised radio-station-edit';
+                    editButton.style.marginLeft = 'auto';
+                    editButton.setAttribute('aria-label', 'Edit ' + (getValue(station, 'Name', 'name') || 'station'));
+                    editButton.setAttribute('title', 'Edit station');
+                    makePencilIcon(editButton);
+                    editButton.addEventListener('click', function () {
+                        if (row.querySelector('.radio-station-edit-form')) return;
+                        var editScrollSnapshot = captureRadioMetaScrollPosition();
+                        var currentName = String(getValue(station, 'Name', 'name') || '');
+                        var currentUrl = String(getValue(station, 'StreamUrl', 'streamUrl') || '');
+                        var currentArtworkPath = String(getValue(station, 'ArtworkPath', 'artworkPath') || '');
+                        var filePath = String(getValue(station, 'FilePath', 'filePath') || getValue(station, 'Id', 'id') || '');
+                        var editForm = document.createElement('div');
+                        editForm.className = 'radio-station-edit-form';
+                        editForm.style.cssText = 'display:flex;flex-direction:column;gap:8px;margin-top:10px;';
+                        var nameLabel = document.createElement('label');
+                        nameLabel.textContent = 'Station name';
+                        var nameInput = document.createElement('input');
+                        nameInput.type = 'text'; nameInput.maxLength = 160; nameInput.className = 'emby-input'; nameInput.value = currentName;
+                        nameLabel.appendChild(nameInput);
+                        var urlLabel = document.createElement('label');
+                        urlLabel.textContent = 'Stream URL';
+                        var urlInput = document.createElement('input');
+                        urlInput.type = 'url'; urlInput.maxLength = 2048; urlInput.className = 'emby-input'; urlInput.value = currentUrl;
+                        urlLabel.appendChild(urlInput);
+                        var artworkLabel = document.createElement('label');
+                        artworkLabel.textContent = 'Station logo URL (optional; leave blank to keep current logo)';
+                        var artworkInput = document.createElement('input');
+                        artworkInput.type = 'url'; artworkInput.maxLength = 2048; artworkInput.className = 'emby-input'; artworkInput.placeholder = 'https://example.com/logo.png';
+                        artworkLabel.appendChild(artworkInput);
+                        var help = document.createElement('div');
+                        help.className = 'radio-path-help';
+                        help.textContent = 'Saving updates the .strm file. A supplied JPG/PNG logo URL downloads a replacement; leaving it blank keeps the current logo and renames it with the station if needed.';
+                        var actions = document.createElement('div');
+                        actions.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;';
+                        var saveButton = document.createElement('button');
+                        saveButton.type = 'button'; saveButton.className = 'emby-button raised button-submit'; saveButton.textContent = 'Save changes';
+                        var cancelButton = document.createElement('button');
+                        cancelButton.type = 'button'; cancelButton.className = 'emby-button raised'; cancelButton.textContent = 'Cancel';
+                        var deleteButton = document.createElement('button');
+                        deleteButton.type = 'button'; deleteButton.className = 'emby-button raised button-delete'; deleteButton.textContent = 'Delete station';
+                        deleteButton.title = 'Remove this station from the Radio Folder while keeping its saved metadata rules and corrections.';
+                        actions.appendChild(saveButton); actions.appendChild(cancelButton); actions.appendChild(deleteButton);
+                        var proxyLabel = document.createElement('label');
+                        proxyLabel.style.cssText = 'display:inline-flex;align-items:center;gap:4px;margin-left:8px;align-self:center;cursor:pointer;';
+                        var proxyCheckbox = document.createElement('input');
+                        proxyCheckbox.type = 'checkbox';
+                        proxyCheckbox.checked = !!getValue(station, 'UseProxy', 'useProxy');
+                        proxyCheckbox.setAttribute('aria-label', 'Use proxy for ' + (currentName || 'station'));
+                        var proxyText = document.createElement('span');
+                        proxyText.textContent = 'proxy';
+                        proxyLabel.appendChild(proxyCheckbox); proxyLabel.appendChild(proxyText);
+                        actions.appendChild(proxyLabel);
+
+                        // Proxy-enabled stations must be explicitly unproxied before editing.
+                        // Keep this lock in the source section so it survives dashboard bundle rebuilds.
+                        var normalEditHelp = 'Saving updates the .strm file. A supplied JPG/PNG logo URL downloads a replacement; leaving it blank keeps the current logo and renames it with the station if needed.';
+                        function updateProxyEditLock(isProxyEnabled) {
+                            [nameInput, urlInput, artworkInput, saveButton].forEach(function (control) {
+                                control.disabled = !!isProxyEnabled;
+                                control.style.opacity = isProxyEnabled ? '0.52' : '';
+                                control.style.cursor = isProxyEnabled ? 'not-allowed' : '';
+                            });
+                            [nameLabel, urlLabel, artworkLabel].forEach(function (label) {
+                                label.style.opacity = isProxyEnabled ? '0.55' : '';
+                                label.style.cursor = isProxyEnabled ? 'not-allowed' : '';
+                            });
+                            if (isProxyEnabled) {
+                                help.textContent = 'Editing is disabled while proxy is enabled. Uncheck “proxy” below to disable it. The station list will refresh; reopen Edit to change the station name, stream URL, or logo.';
+                                help.style.cssText = 'padding:8px;border-left:3px solid var(--theme-primary-color, #888);background:var(--cardBackgroundColor, rgba(128,128,128,0.08));';
+                                proxyLabel.title = 'Proxy is enabled. Uncheck to restore direct playback and then reopen Edit to change station details.';
+                            } else {
+                                help.textContent = normalEditHelp;
+                                help.style.cssText = '';
+                                proxyLabel.title = 'Enable or disable proxy playback for this station.';
+                            }
+                        }
+                        updateProxyEditLock(proxyCheckbox.checked);
+
+                        proxyCheckbox.addEventListener('change', function () {
+                            var actionScrollSnapshot = captureRadioMetaScrollPosition();
+                            var desired = proxyCheckbox.checked;
+                            // Keep fields locked while the request is in flight. On success the
+                            // station list is rescanned; on failure restore the prior lock state.
+                            updateProxyEditLock(true);
+                            proxyCheckbox.disabled = true;
+                            status.textContent = (desired ? 'Enabling proxy for ' : 'Disabling proxy for ') + currentName + '...';
+                            ApiClient.ajax({
+                                type: 'POST',
+                                url: ApiClient.getUrl('RadioMeta/Stations/Proxy'),
+                                data: JSON.stringify({ FilePath: filePath, UseProxy: desired }),
+                                contentType: 'application/json',
+                                dataType: 'json'
+                            }).then(function (data) { if (data && typeof data.json === 'function') return data.json(); return data; })
+                              .then(function (data) {
+                                  if (typeof data === 'string') { try { data = JSON.parse(data); } catch (ignore) {} }
+                                  if (data && (data.Success === true || data.success === true)) {
+                                      status.textContent = 'Proxy ' + (desired ? 'enabled' : 'disabled') + ' for ' + currentName + '. Refreshing Emby library...';
+                                      requestTargetedLibraryRefresh(data).then(function (scanResult) {
+                                          status.textContent = 'Proxy ' + (desired ? 'enabled' : 'disabled') + ' for ' + currentName + '. ' + scanResult.message + ' Refreshing station list...';
+                                          scanStationFolder(scanResult.message, data);
+                                          restoreRadioMetaScrollPosition(actionScrollSnapshot);
+                                      });
+                                  } else {
+                                      recordStationOperationFailure(desired ? 'Enable proxy' : 'Disable proxy', currentName, 'server-rejected');
+                                      proxyCheckbox.checked = !desired;
+                                      proxyCheckbox.disabled = false;
+                                      updateProxyEditLock(proxyCheckbox.checked);
+                                      window.alert((data && (data.Error || data.error)) || 'The server did not confirm the proxy change.');
+                                  restoreRadioMetaScrollPosition(actionScrollSnapshot);
+                                  }
+                              }).catch(function (error) {
+                                  recordStationOperationFailure(desired ? 'Enable proxy' : 'Disable proxy', currentName, 'request-failed');
+                                  proxyCheckbox.checked = !desired;
+                                  proxyCheckbox.disabled = false;
+                                  updateProxyEditLock(proxyCheckbox.checked);
+                                  window.alert('Could not change proxy setting: ' + (error && error.message ? error.message : String(error)));
+                                  restoreRadioMetaScrollPosition(actionScrollSnapshot);
+                              });
+                        });
+                        editForm.appendChild(nameLabel); editForm.appendChild(urlLabel); editForm.appendChild(artworkLabel); editForm.appendChild(help); editForm.appendChild(actions);
+                        content.appendChild(editForm);
+                        editButton.disabled = true;
+                        if (proxyCheckbox.checked) focusRadioMetaWithoutScrolling(proxyCheckbox, false);
+                        else focusRadioMetaWithoutScrolling(nameInput, false);
+                        restoreRadioMetaScrollPosition(editScrollSnapshot);
+                        cancelButton.addEventListener('click', function () {
+                            var cancelScrollSnapshot = captureRadioMetaScrollPosition();
+                            editForm.remove(); editButton.disabled = false;
+                            restoreRadioMetaScrollPosition(cancelScrollSnapshot);
+                        });
+                        deleteButton.addEventListener('click', function () {
+                            var actionScrollSnapshot = captureRadioMetaScrollPosition();
+                            var stationName = currentName || 'this station';
+                            if (!window.confirm('Disable ' + stationName + '? This removes its .strm file, matching station artwork, and proxy sidecar from the Radio Folder. Its saved station metadata rules and title corrections will be kept.')) return;
+                            deleteButton.disabled = true; saveButton.disabled = true; cancelButton.disabled = true;
+                            status.textContent = 'Disabling ' + stationName + '...';
+                            ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('RadioMeta/Stations/Delete'), data: JSON.stringify({ FilePath: filePath }), contentType: 'application/json', dataType: 'json' })
+                                .then(function (data) { if (data && typeof data.json === 'function') return data.json(); return data; })
+                                .then(function (data) {
+                                    if (typeof data === 'string') { try { data = JSON.parse(data); } catch (ignore) {} }
+                                    if (data && (data.Success === true || data.success === true)) {
+                                        var deleteWarning = String(getValue(data, 'Warning', 'warning') || '');
+                                        requestTargetedLibraryRefresh(data).then(function (scanResult) {
+                                            var notes = [deleteWarning, scanResult.message].filter(Boolean).join(' ');
+                                            status.textContent = 'Disabled ' + stationName + '. Removed its .strm file and matching station files; saved station configuration was kept. ' + notes + ' Refreshing station list...';
+                                            scanStationFolder(notes, data);
+                                            restoreRadioMetaScrollPosition(actionScrollSnapshot);
+                                        });
+                                    } else {
+                                        recordStationOperationFailure('Delete station', stationName, 'server-rejected');
+                                        window.alert((data && (data.Error || data.error)) || 'The server did not confirm that the station was disabled.');
+                                        deleteButton.disabled = false; updateProxyEditLock(proxyCheckbox.checked); cancelButton.disabled = false;
+                                        restoreRadioMetaScrollPosition(actionScrollSnapshot);
+                                    }
+                                })
+                                .catch(function (error) { recordStationOperationFailure('Delete station', stationName, 'request-failed'); window.alert('Station delete failed: ' + (error && error.message ? error.message : String(error))); deleteButton.disabled = false; updateProxyEditLock(proxyCheckbox.checked); cancelButton.disabled = false; restoreRadioMetaScrollPosition(actionScrollSnapshot); });
+                        });
+                        saveButton.addEventListener('click', function () {
+                            var actionScrollSnapshot = captureRadioMetaScrollPosition();
+                            if (proxyCheckbox.checked) {
+                                window.alert('Disable proxy for this station first. The station list will refresh; reopen Edit to make changes.');
+                                return;
+                            }
+                            var editedName = nameInput.value.trim();
+                            var editedUrl = urlInput.value.trim();
+                            if (!editedName) { nameInput.focus(); window.alert('Station name cannot be blank.'); return; }
+                            if (!editedUrl) { urlInput.focus(); window.alert('Stream URL cannot be blank.'); return; }
+                            saveButton.disabled = true; cancelButton.disabled = true;
+                            status.textContent = 'Saving changes to ' + currentName + '...';
+                            ApiClient.ajax({
+                                type: 'POST',
+                                url: ApiClient.getUrl('RadioMeta/Stations/Edit'),
+                                data: JSON.stringify({ FilePath: filePath, Name: editedName, StreamUrl: editedUrl, ArtworkUrl: artworkInput.value.trim() }),
+                                contentType: 'application/json',
+                                dataType: 'json'
+                            }).then(function (data) {
+                                if (data && typeof data.json === 'function') return data.json();
+                                return data;
+                            }).then(function (data) {
+                                if (typeof data === 'string') { try { data = JSON.parse(data); } catch (ignore) {} }
+                                if (data && (data.Success === true || data.success === true)) {
+                                    var updatedStationName = data.Name || data.name || editedName;
+                                    status.textContent = 'Updated station "' + updatedStationName + '". Refreshing Emby library...';
+                                    requestTargetedLibraryRefresh(data).then(function (scanResult) {
+                                        status.textContent = 'Updated station "' + updatedStationName + '". ' + scanResult.message + ' Refreshing station list...';
+                                        scanStationFolder(scanResult.message, data);
+                                        restoreRadioMetaScrollPosition(actionScrollSnapshot);
+                                    });
+                                } else {
+                                    recordStationOperationFailure('Edit/rename station', editedName || currentName, 'server-rejected');
+                                    window.alert((data && (data.Error || data.error)) || 'The server did not confirm the station update.');
+                                    updateProxyEditLock(proxyCheckbox.checked); cancelButton.disabled = false;
+                                    restoreRadioMetaScrollPosition(actionScrollSnapshot);
+                                }
+                            }).catch(function (error) {
+                                recordStationOperationFailure('Edit/rename station', editedName || currentName, 'request-failed');
+                                window.alert('Station edit failed: ' + (error && error.message ? error.message : String(error)));
+                                updateProxyEditLock(proxyCheckbox.checked); cancelButton.disabled = false;
+                                restoreRadioMetaScrollPosition(actionScrollSnapshot);
+                            });
+                        });
+                    });
+                    row.appendChild(editButton);
+                    container.appendChild(row);
+                });
+                status.textContent = withCompletionNote('Scan complete: ' + stations.length + ' unique .strm file(s) listed; ' +
+                    scannedFiles + ' station file(s) examined in ' + folder +
+                    '. Configured path: ' + (configuredFolder || '(not returned)') + '; directories examined: ' + directoriesExamined + '; directory errors: ' + directoryErrors + '. Existing files were not modified.');
+                reportStationOperationResult(stationOperationData, { stationListRefreshStatus: 'completed' });
+            }).catch(function (error) {
+                status.textContent = withCompletionNote('Station scan failed: ' +
+                    (error && error.message ? error.message : String(error))); 
+                console.error('Radio Meta station scan:', error);
+                reportStationOperationResult(stationOperationData, { stationListRefreshStatus: 'failed' });
+            }).finally(function () {
+                stationScanInProgress = false;
+                restoreRadioMetaScrollPosition(scrollSnapshot);
+            });
+        }
+
+        function updateStationFolderVisibilityButton() {
+            var button = view.querySelector('#radioStationScanButton');
+            if (!button) return;
+            var label = button.querySelector('span');
+            if (label) label.textContent = stationFolderPanelVisible ? 'Hide Folder' : 'Show Folder';
+            button.setAttribute('aria-expanded', stationFolderPanelVisible ? 'true' : 'false');
+        }
+
+        function toggleStationFolderVisibility() {
+            var panel = view.querySelector('#radioStationFolderPanel');
+            if (!panel) return;
+
+            if (stationFolderPanelVisible) {
+                stationFolderPanelVisible = false;
+                panel.style.display = 'none';
+                updateStationFolderVisibilityButton();
+                return;
+            }
+
+            stationFolderPanelVisible = true;
+            panel.style.display = '';
+            updateStationFolderVisibilityButton();
+            // Opening the folder view refreshes the list; hiding it only
+            // collapses the panel and never changes or deletes station files.
+            scanStationFolder();
+        }
+

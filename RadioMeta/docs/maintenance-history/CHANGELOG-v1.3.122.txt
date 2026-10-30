@@ -1,0 +1,14 @@
+Radio Meta v1.3.122 — Nullable Rollback Warning Fix
+
+BASELINE
+- Based on v1.3.121, which uses the working v1.3.117 dashboard event wiring and adds the compact artist/title correction editor.
+
+CHANGE
+- Fixed the nullable-flow warning in RadioMetadataRulesService when restoring exact title corrections after a failed configuration save. The saved rollback value is normalized to a non-null list, including for a legacy or malformed null configuration, so the rollback assignment is safe.
+- No dashboard interaction, correction matching, metadata pipeline, station-wide cleanup behavior, or WebLoader implementation was changed.
+- Updated the project and dashboard controller version to 1.3.122.
+
+VALIDATION
+- The dashboard controller was regenerated from all 15 ordered source sections and matches those sections exactly.
+- Static inspection confirms the nullable rollback assignment now uses a non-null value.
+- JavaScript syntax validation was run in the packaging environment. A .NET build against the user's Emby assemblies and a live Emby test still need to be run on the Windows host.

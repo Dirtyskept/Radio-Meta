@@ -1,0 +1,24 @@
+Radio Meta v1.3.124 — Parallel Shoutcast + Direct ICY Metadata Reads
+
+PURPOSE
+Reduce delay after a station change by starting both existing metadata sources as soon as the station .strm URL has been read.
+
+CHANGES
+- ReadNetworkMetadataAsync now starts the existing Shoutcast endpoint lookup and existing direct ICY stream read concurrently when direct ICY is enabled.
+- The first usable, non-ignored title wins. Empty, rejected, or ignored metadata from one source does not block the other source.
+- The slower losing request is cancelled after a winner is selected, using the existing cancellation-aware HTTP/stream reads.
+- If both usable results have completed before cancellation, Radio Meta compares parsed artist/title values after case, spacing, and punctuation normalization and records a diagnostic match/conflict. It does not wait for a slower second result just to compare, preserving the faster first-result path.
+- Diagnostic events state when parallel reads begin and when the losing request is cancelled. Performance timings include the actual request durations, including time spent before cancellation.
+- Preserved the existing per-source timeout cap, direct ICY maximum of 40 metadata intervals, title validation/ignore rules, cache, and FFprobe fallback behavior.
+- Updated project and dashboard bundle version to 1.3.124.
+
+PRESERVED
+- Existing direct ICY reader, Shoutcast endpoints and negative-cache behavior.
+- Existing station detection, .strm fallback display, metadata publication, artist/title parsing, history editor, station rules, proxy, and WebLoader implementation.
+- No changes to audio playback or the WebLoader / nowplayingbar.js payload.
+
+VALIDATION
+- Dashboard bundle regenerated from the 15 readable source sections in the build-script order.
+- Source/bundle version alignment, artist-editor presence, changed code paths, and package integrity checked.
+- JavaScript syntax checks and SHA-256 manifest generated.
+- A .NET build and live Emby playback/station-switch test have not been run in this environment. Please build on Windows and test station changes with direct ICY enabled; compare diagnostic stage timings and whether the song/artist replaces the immediate .strm station title sooner.

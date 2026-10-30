@@ -1,0 +1,410 @@
+        function addCurrentlyPlayingStationToForm() {
+            var button = view.querySelector('#radioStationAddCurrentButton');
+            var status = view.querySelector('#radioStationCreateStatus');
+            var nameInput = view.querySelector('#radioStationCreateName');
+            var urlInput = view.querySelector('#radioStationCreateUrl');
+            var artworkInput = view.querySelector('#radioStationCreateArtworkUrl');
+            if (!button || !status || !nameInput || !urlInput || !artworkInput || button.disabled) return;
+
+            button.disabled = true;
+            var previousText = button.textContent;
+            button.textContent = 'Reading station...';
+            status.textContent = 'Looking for the currently playing station in Emby. No files will be created by this action.';
+            setCurrentStreamTestResult('checking', 'Preparing stream metadata test…', 'The test will run against the active station stream after station details are identified.');
+
+            ApiClient.getJSON(ApiClient.getUrl('RadioMeta/Stations/CurrentlyPlaying'))
+                .then(function (data) {
+                    if (data && typeof data.json === 'function') return data.json();
+                    function parseStationPayload(value) {
+                        if (typeof value !== 'string') return value;
+                        try { return JSON.parse(value); } catch (ignore) { return value; }
+                    }
+                    var payload = parseStationPayload(data);
+                    if (payload && typeof payload === 'object') {
+                        if (payload.responseJSON !== undefined) payload = parseStationPayload(payload.responseJSON);
+                        else if (payload.responseText !== undefined) payload = parseStationPayload(payload.responseText);
+                    }
+                    var envelopeNames = ['Response', 'response', 'Result', 'result', 'd', 'Data', 'data', 'Body', 'body'];
+                    function isCurrentStationDto(value) {
+                        return !!value && typeof value === 'object' &&
+                            (value.Available !== undefined || value.available !== undefined ||
+                             value.Name !== undefined || value.name !== undefined ||
+                             value.Error !== undefined || value.error !== undefined);
+                    }
+                    for (var depth = 0; depth < 5 && !isCurrentStationDto(payload); depth++) {
+                        var nested = null;
+                        for (var i = 0; payload && typeof payload === 'object' && i < envelopeNames.length; i++) {
+                            var candidate = parseStationPayload(payload[envelopeNames[i]]);
+                            if (isCurrentStationDto(candidate)) { nested = candidate; break; }
+                            if (!nested && candidate && typeof candidate === 'object' && envelopeNames.some(function (key) { return candidate[key] !== undefined; })) nested = candidate;
+                        }
+                        if (!nested) break;
+                        payload = nested;
+                    }
+                    return payload;
+                })
+                .catch(function (requestError) {
+                    // Still try the client-side playback-info path if the plugin's
+                    // in-memory capture endpoint has no candidate or cannot respond.
+                    return {
+                        Available: false,
+                        Error: requestError && requestError.message
+                            ? 'The plugin capture endpoint did not return a station (' + requestError.message + ').'
+                            : 'The plugin capture endpoint did not return a station.'
+                    };
+                })
+                .then(function (data) {
+                    var available = getValue(data, 'Available', 'available') === true;
+                    var existingStreamUrl = String(getValue(data, 'StreamUrl', 'streamUrl') || '').trim();
+                    if (available && existingStreamUrl) return data;
+
+                    // TuneIn/Radio Browser can omit the original URL from getSessions()
+                    // and the item DTO, while Emby's GetPlaybackInfo returns it under
+                    // MediaSources[].Path. Use that API only as a fallback; never save
+                    // Emby's own /emby/Audio/... playback URL as a station stream.
+                    return resolveCurrentPlaybackInfoStation().then(function (fallback) {
+                        if (!fallback) return data;
+                        var serverName = String(getValue(data, 'Name', 'name') || '').trim();
+                        var serverUrl = String(getValue(data, 'StreamUrl', 'streamUrl') || '').trim();
+                        var serverArtwork = String(getValue(data, 'ArtworkUrl', 'artworkUrl') || '').trim();
+                        fallback.Name = serverName || fallback.Name;
+                        fallback.StreamUrl = serverUrl || fallback.StreamUrl;
+                        fallback.ArtworkUrl = serverArtwork || fallback.ArtworkUrl;
+                        fallback.ItemId = String(getValue(data, 'ItemId', 'itemId') || getValue(fallback, 'ItemId', 'itemId') || '').trim();
+                        var priorMessage = String(getValue(data, 'Message', 'message') || '').trim();
+                        if (priorMessage && available) fallback.Message = priorMessage + ' ' + fallback.Message;
+                        return fallback;
+                    });
+                })
+                .then(function (data) {
+                    var error = getValue(data, 'Error', 'error');
+                    var available = getValue(data, 'Available', 'available') === true;
+                    if (error || !available) {
+                        status.textContent = error || getValue(data, 'Message', 'message') || 'No currently playing radio station could be identified. Start the station in Emby, wait a few seconds, and try again.';
+                        setCurrentStreamTestResult('error', 'Test not started · current stream unavailable.', status.textContent);
+                        return;
+                    }
+
+                    var name = String(getValue(data, 'Name', 'name') || '');
+                    var streamUrl = String(getValue(data, 'StreamUrl', 'streamUrl') || '');
+                    var artworkUrl = String(getValue(data, 'ArtworkUrl', 'artworkUrl') || '').trim();
+
+                    // Radio Browser/Emby channel items may have a valid Primary image
+                    // even when they expose no path, image source list, or provider IDs.
+                    // Ask Emby for that image using the captured library item id.
+                    if (!artworkUrl) {
+                        var embyItemId = String(getValue(data, 'ItemId', 'itemId') || '').trim();
+                        if (embyItemId && ApiClient && typeof ApiClient.getImageUrl === 'function') {
+                            try {
+                                artworkUrl = ApiClient.getImageUrl(embyItemId, { type: 'Primary' });
+                                var accessToken = typeof ApiClient.accessToken === 'function' ? ApiClient.accessToken() : '';
+                                if (artworkUrl && accessToken && !/[?&]api_key=/i.test(artworkUrl)) {
+                                    artworkUrl += (artworkUrl.indexOf('?') >= 0 ? '&' : '?') + 'api_key=' + encodeURIComponent(accessToken);
+                                }
+                            } catch (imageUrlError) {
+                                artworkUrl = '';
+                            }
+                        }
+                    }
+                    if (!name.trim() && !streamUrl.trim()) {
+                        status.textContent = getValue(data, 'Message', 'message') || 'Emby did not expose enough station details to pre-fill the form.';
+                        setCurrentStreamTestResult('error', 'Test not started · station details unavailable.', status.textContent);
+                        return;
+                    }
+
+                    // Replace the three inputs as one pre-fill operation so an
+                    // unavailable field cannot accidentally retain an older URL.
+                    nameInput.value = name;
+                    urlInput.value = streamUrl;
+                    artworkInput.value = artworkUrl;
+
+                    // Run separately so the station form is still filled promptly.
+                    // Test the exact resolved stream URL supplied by the Current Playback workflow. The server can run this independently of its capture store.
+                    testCurrentStreamMetadata(name, streamUrl);
+
+                    var missing = [];
+                    if (!name.trim()) missing.push('station name');
+                    if (!streamUrl.trim()) missing.push('stream URL');
+                    if (!artworkUrl.trim()) missing.push('station logo URL');
+                    var source = String(getValue(data, 'Source', 'source') || 'Emby playback');
+                    var note = String(getValue(data, 'Message', 'message') || '');
+                    status.textContent = 'Pre-filled station details from ' + source + '. Review or edit the fields, then click Create .strm when ready. No files have been created.' +
+                        (note ? ' ' + note : (missing.length ? ' Still needed or unavailable: ' + missing.join(', ') + '.' : ''));
+
+                    var focusTarget = !name.trim() ? nameInput : (!streamUrl.trim() ? urlInput : (!artworkUrl.trim() ? artworkInput : nameInput));
+                    if (typeof nameInput.scrollIntoView === 'function') nameInput.scrollIntoView({ block: 'center', behavior: 'auto' });
+                    focusTarget.focus();
+                })
+                .catch(function (error) {
+                    status.textContent = 'Could not read the current station: ' + (error && error.message ? error.message : String(error));
+                    setCurrentStreamTestResult('empty', 'No metadata detected · station lookup failed.', status.textContent);
+                    console.error('Radio Meta currently-playing station pre-fill:', error);
+                })
+                .finally(function () {
+                    button.disabled = false;
+                    button.textContent = previousText || 'Add to Radio Meta';
+                });
+        }
+
+        // Optional paste-import for Radio Meta Stream Capture JSON.
+        // This remains isolated to the existing Station Name field and does not
+        // change ordinary station creation or metadata capture behavior.
+        function parseRadioMetaStreamCapturePaste(rawText) {
+            if (typeof rawText !== 'string' || rawText.length > 250000) {
+                return { recognized: false };
+            }
+            var text = rawText.trim();
+            if (!text || text.charAt(0) !== '{') return { recognized: false };
+
+            var payload;
+            try {
+                payload = JSON.parse(text);
+            } catch (parseError) {
+                return /radiometa-add-station-capture/i.test(text)
+                    ? { recognized: true, error: 'The pasted Stream Capture data is not valid JSON. Copy Add Data again and retry.' }
+                    : { recognized: false };
+            }
+            if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
+                String(payload.schema || '') !== 'radiometa-add-station-capture') {
+                return { recognized: false };
+            }
+
+            var schemaVersion = Number(payload.schemaVersion == null ? 1 : payload.schemaVersion);
+            if (schemaVersion !== 1) {
+                return { recognized: true, error: 'This Stream Capture schema version (' + String(payload.schemaVersion) + ') is not supported. Use a compatible Radio Meta Stream Capture version.' };
+            }
+
+            function firstText(values) {
+                for (var index = 0; index < values.length; index++) {
+                    var value = values[index];
+                    if (typeof value === 'string' && value.trim()) return value.trim();
+                }
+                return '';
+            }
+            function objectUrl(value) {
+                if (typeof value === 'string') return value.trim();
+                if (value && typeof value === 'object' && typeof value.url === 'string') return value.url.trim();
+                return '';
+            }
+            function validHttpUrl(value) {
+                if (!value || value.length > 2048) return false;
+                try {
+                    var parsed = new URL(value);
+                    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && !!parsed.hostname;
+                } catch (urlError) {
+                    return false;
+                }
+            }
+
+            var icy = payload.icyMetadataProbe && typeof payload.icyMetadataProbe === 'object'
+                ? payload.icyMetadataProbe : {};
+            var stationArtwork = payload.stationArtwork;
+            var logoUrl = firstText([
+                payload.stationArtworkUrl,
+                payload.stationLogoUrl,
+                payload.stationLogoURL,
+                payload.logoUrl,
+                payload.artworkUrl,
+                payload.artworkURL,
+                objectUrl(stationArtwork),
+                objectUrl(payload.stationLogo),
+                objectUrl(payload.stationArt)
+            ]);
+            // Compatible with Capture v1.0.2 payloads which include ranked artwork candidates.
+            if (!logoUrl && Array.isArray(payload.stationArtworkCandidates)) {
+                var recommendedArtwork = payload.stationArtworkCandidates.find(function (item) {
+                    return item && typeof item.url === 'string' && item.url.trim() &&
+                        (item.selected === true || item.isSelected === true || item.chosen === true);
+                });
+                if (!recommendedArtwork) {
+                    recommendedArtwork = payload.stationArtworkCandidates.find(function (item) {
+                        return item && typeof item.url === 'string' && item.url.trim() &&
+                            /station|logo|brand/i.test(String(item.role || '') + ' ' + String(item.source || ''));
+                    });
+                }
+                if (recommendedArtwork) logoUrl = recommendedArtwork.url.trim();
+            }
+
+            var name = firstText([
+                payload.stationName,
+                payload.stationNameCandidate,
+                icy.stationName,
+                icy.icyName,
+                payload.station && (payload.station.name || payload.station.stationName)
+            ]);
+            var streamUrl = firstText([
+                payload.streamUrl,
+                payload.StreamUrl,
+                payload.stream && (payload.stream.url || payload.stream.streamUrl)
+            ]);
+
+            return {
+                recognized: true,
+                schemaVersion: schemaVersion,
+                stationName: name,
+                streamUrl: streamUrl,
+                stationArtworkUrl: logoUrl,
+                streamType: firstText([payload.streamTypeLabel, payload.streamType]),
+                icyStatus: firstText([icy.status]),
+                icyReasonCode: firstText([icy.reasonCode]),
+                hasArtworkField: !!logoUrl,
+                validStreamUrl: validHttpUrl(streamUrl),
+                validArtworkUrl: validHttpUrl(logoUrl)
+            };
+        }
+
+        function importRadioMetaStreamCapturePaste(event) {
+            var clipboard = event && (event.clipboardData || window.clipboardData);
+            if (!clipboard || typeof clipboard.getData !== 'function') return;
+            var pastedText = '';
+            try { pastedText = clipboard.getData('text/plain') || clipboard.getData('text') || ''; }
+            catch (clipboardError) { return; }
+
+            var imported = parseRadioMetaStreamCapturePaste(pastedText);
+            if (!imported.recognized) return; // Ordinary station-name pastes are unchanged.
+            event.preventDefault();
+
+            var status = view.querySelector('#radioStationCreateStatus');
+            var nameInput = view.querySelector('#radioStationCreateName');
+            var urlInput = view.querySelector('#radioStationCreateUrl');
+            var artworkInput = view.querySelector('#radioStationCreateArtworkUrl');
+            if (!nameInput || !urlInput || !artworkInput) {
+                if (status) status.textContent = 'Stream Capture data was recognized, but the station form fields could not be found.';
+                return;
+            }
+            if (imported.error) {
+                if (status) status.textContent = imported.error;
+                return;
+            }
+
+            // Replace all three fields together to avoid accidentally reusing a prior
+            // station's stream or artwork when the capture does not contain that field.
+            var warnings = [];
+            var name = imported.stationName || '';
+            if (name.length > 160) {
+                name = name.slice(0, 160);
+                warnings.push('station name was shortened to the 160-character field limit');
+            }
+            var streamUrl = imported.validStreamUrl ? imported.streamUrl : '';
+            if (imported.streamUrl && !imported.validStreamUrl) {
+                warnings.push('stream URL was not imported because it is not a valid HTTP/HTTPS URL or exceeds the 2048-character field limit');
+            } else if (!imported.streamUrl) {
+                warnings.push('capture did not contain a stream URL');
+            }
+            var artworkUrl = imported.validArtworkUrl ? imported.stationArtworkUrl : '';
+            if (imported.stationArtworkUrl && !imported.validArtworkUrl) {
+                warnings.push('artwork URL was not imported because it is not a valid HTTP/HTTPS URL or exceeds the 2048-character field limit');
+            } else if (!imported.stationArtworkUrl) {
+                warnings.push('this capture did not include a station artwork URL; the logo field was cleared');
+            }
+            if (!name) warnings.push('station name was not present in the capture');
+
+            nameInput.value = name;
+            urlInput.value = streamUrl;
+            artworkInput.value = artworkUrl;
+
+            setCurrentStreamTestResult('idle', 'Stream Capture imported · stream not tested.', 'Pasting capture data only fills the form. It does not run a metadata test or create station files.');
+            if (status) {
+                status.textContent = 'Imported Stream Capture data' +
+                    (name ? ': station name' : '') +
+                    (streamUrl ? (name ? ', ' : ': ') + 'stream URL' : '') +
+                    (artworkUrl ? ', station artwork URL' : '') +
+                    '. Review every field before clicking Create .strm. No files have been created.' +
+                    (imported.streamType ? ' Detected stream type: ' + imported.streamType + '.' : '') +
+                    (imported.icyStatus ? ' ICY check: ' + imported.icyStatus + (imported.icyReasonCode ? ' (' + imported.icyReasonCode + ')' : '') + '.' : '') +
+                    (warnings.length ? ' Check: ' + warnings.join('; ') + '.' : '');
+            }
+            if (typeof nameInput.scrollIntoView === 'function') nameInput.scrollIntoView({ block: 'center', behavior: 'auto' });
+            (name ? (streamUrl ? (artworkUrl ? nameInput : artworkInput) : urlInput) : nameInput).focus();
+        }
+
+        var stationCreateNamePasteInput = view.querySelector('#radioStationCreateName');
+        if (stationCreateNamePasteInput) {
+            stationCreateNamePasteInput.addEventListener('paste', importRadioMetaStreamCapturePaste);
+        }
+
+        var stationAddCurrentButton = view.querySelector('#radioStationAddCurrentButton');
+        if (stationAddCurrentButton) stationAddCurrentButton.addEventListener('click', addCurrentlyPlayingStationToForm);
+        ['#radioStationCreateName', '#radioStationCreateUrl', '#radioStationCreateArtworkUrl'].forEach(function (selector) {
+            var input = view.querySelector(selector);
+            if (input) input.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter') { event.preventDefault(); createStationFile(); }
+            });
+        });
+
+        var stationModeAddButton = view.querySelector('#radioStationModeAdd');
+        if (stationModeAddButton) {
+            stationModeAddButton.addEventListener('click', addStationModeRule);
+        }
+        var stationModeNameInput = view.querySelector('#radioStationModeName');
+        if (stationModeNameInput) {
+            stationModeNameInput.addEventListener('input', function () {
+                var name = stationModeNameInput.value.trim().toLowerCase();
+                var existing = stationModeRules.find(function (rule) {
+                    return getModeStation(rule).toLowerCase() === name;
+                });
+                if (!existing) return;
+                var modeSelect = view.querySelector('#radioStationModeValue');
+                var delaySelect = view.querySelector('#radioStationModeDelay');
+                if (modeSelect) modeSelect.value = getStationMode(existing);
+                if (delaySelect) delaySelect.value = String(getStationModeDelaySeconds(existing));
+            });
+            stationModeNameInput.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    addStationModeRule();
+                }
+            });
+        }
+
+        var stationFolderChangeButton = view.querySelector('#radioStationFolderChange');
+        if (stationFolderChangeButton) {
+            stationFolderChangeButton.addEventListener('click', focusStationFolderSetting);
+        }
+
+        var pathSettingsSaveButton = view.querySelector('#radioPathSettingsSave');
+        if (pathSettingsSaveButton) {
+            pathSettingsSaveButton.addEventListener('click', savePathSettings);
+        }
+        ['#radioStationFolder', '#radioFfprobePath'].forEach(function (selector) {
+            var input = view.querySelector(selector);
+            if (input) {
+                input.addEventListener('keydown', function (event) {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        savePathSettings();
+                    }
+                });
+            }
+        });
+
+        var historyScanButton = view.querySelector('#radioHistoryScan');
+        if (historyScanButton) {
+            historyScanButton.addEventListener('click', toggleHistoryVisibility);
+        }
+
+        var historyClearButton = view.querySelector('#radioHistoryClear');
+        if (historyClearButton) {
+            historyClearButton.addEventListener('click', clearHistory);
+        }
+
+        updateHistoryVisibilityButton();
+
+        var addButton = view.querySelector('#radioIgnoreAdd');
+        if (addButton) {
+            addButton.addEventListener('click', addIgnorePhrase);
+        }
+        var phraseInput = view.querySelector('#radioIgnorePhrase');
+        if (phraseInput) {
+            phraseInput.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    addIgnorePhrase();
+                }
+            });
+        }
+        view.addEventListener('click', onViewClick);
+        view.addEventListener('viewshow', onViewShow);
+        view.addEventListener('viewhide', onViewHide);
+    };
+});

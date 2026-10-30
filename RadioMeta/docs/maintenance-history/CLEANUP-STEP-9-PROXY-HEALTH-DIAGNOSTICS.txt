@@ -1,0 +1,41 @@
+RADIO META v1.3.110 — PROXY HEALTH DIAGNOSTICS
+=====================================================
+
+Purpose
+-------
+Expand the administrator-only diagnostic report to cover the optional FFmpeg proxy, which previously had only indirect error messages and per-operation sidecar status.
+
+New proxy diagnostics
+---------------------
+- Listener running/stopped state, loopback bind scope/address and configured port.
+- FFmpeg executable availability without launching FFmpeg or disclosing its path.
+- Active client and FFmpeg process counts alongside their enforced limits.
+- In-memory counters since plugin startup for client connections, FFmpeg start attempts/starts, successful audio responses and startup failures.
+- A bounded inventory of .radiometa-proxy.json sidecars: valid proxy-enabled .strm files, invalid sidecars, orphaned sidecars, and valid sidecars whose .strm does not point at the expected proxy endpoint.
+- Dashboard check and text report entries that summarize proxy state without showing upstream URLs, tokens, filesystem paths or raw process output.
+
+Safety
+------
+- The diagnostics endpoint remains admin-only and read-only.
+- Sidecar inventory is limited to the top-level station folder and at most 2,048 sidecars per request.
+- No FFmpeg process is started by diagnostics.
+- No proxy URL, upstream URL, token, file path, Emby item/session/device ID, or raw FFmpeg stderr is returned.
+- Runtime counters are in memory and reset when the plugin/server restarts.
+
+Preserved
+---------
+- No changes to actual proxy streaming behavior, FFmpeg arguments, concurrency limits, metadata capture timeout, ICY interval limit, StationOnly behavior, station transition logic, title parsing, library refresh, or WebLoader.
+- No minification.
+- WebLoader files match v1.3.109 byte-for-byte; NOWPLAYINGBAR-CHANGES.txt is unchanged.
+
+Requested Windows testing
+-------------------------
+1. Build the project against installed Emby assemblies.
+2. With no proxied station files, run diagnostics and confirm the listener state is understandable and the enabled count is zero.
+3. Enable the proxy on a disposable MP3-compatible HTTP(S) station. Confirm enabled station count is 1 and invalid/orphan/mismatch counts are zero.
+4. Play it and verify active counts increase during playback and fall back after stop.
+5. Disable proxy and verify enabled station count becomes zero and the sidecar is removed.
+6. Confirm direct stations and the StationOnly rule for OZFM are unaffected.
+7. Verify diagnostics remain accessible only to administrators.
+
+Static checks are not a substitute for compiling against Emby and testing the running service on Windows.

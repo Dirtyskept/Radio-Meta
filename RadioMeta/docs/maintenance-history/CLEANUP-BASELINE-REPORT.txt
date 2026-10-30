@@ -1,0 +1,38 @@
+RADIO META CODE CLEANUP — BASELINE REPORT
+========================================
+
+Starting point
+--------------
+This cleanup package is derived from the user's v1.3.98 source package:
+RadioMeta-v1.3.98-Proxy-Security-Hardening-Source.zip.
+The previous working v1.3.98 package is not overwritten. Keep that ZIP as the
+rollback point; this package is a separate v1.3.99 candidate.
+
+Preserved identity and behavior
+-------------------------------
+- Project version is advanced to 1.3.99 for this cleanup candidate.
+- Assembly name, root namespace, existing plugin GUID, and config XML identity
+  are retained.
+- The cleanup does not remove station creation, metadata capture, history,
+  diagnostics, dashboard/player display integration, proxy, or WebLoader.
+- The WebLoader directory matches the v1.3.97 baseline byte-for-byte. No
+  nowplayingbar.js payload, installer, loader, original backup, or restore file
+  was changed for this step.
+- The generated dashboard script is rebuilt from its 15 readable source
+  sections; those source sections remain included for maintenance.
+
+What this step does
+-------------------
+Only conservative cleanup was applied: clearly unused internal wrapper removal,
+removal of a no-op logging helper while preserving its silent/fail-closed
+behavior, and correction of stale user-facing wording that still called the
+proxy experimental. No metadata algorithm or playback decision logic was
+intentionally changed.
+
+Validation limitation
+---------------------
+The original v1.3.98 manifest was verified before copying. The updated source
+files and regenerated dashboard bundle are statically checked in this package.
+The C# project has not been compiled here because the .NET SDK and Emby build
+assemblies are unavailable in this environment. Build and smoke-test this
+candidate on the Windows Emby machine before treating it as known-good.

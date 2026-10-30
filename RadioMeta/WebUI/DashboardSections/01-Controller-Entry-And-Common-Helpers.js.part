@@ -1,0 +1,259 @@
+    return function (view) {
+        ensureIntegratedDisplayHelperForDashboard();
+        var refreshTimer = null;
+        var requestInProgress = false;
+        var historyReloadPending = false;
+        var historyActionInProgress = false;
+        var hasLoadedOnce = false;
+        var historyPanelVisible = false;
+        var historyItems = [];
+        var activeHistoryEditId = '';
+        var ignoreRules = [];
+        var ignoreRequestInProgress = false;
+        var ignoreSaveInProgress = false;
+        var stationModeRules = [];
+        var stationModeRequestInProgress = false;
+        var stationModeSaveInProgress = false;
+        var pathSettingsRequestInProgress = false;
+        var pathSettingsSaveInProgress = false;
+        var titleCleanupRules = [];
+        var titleCleanupRequestInProgress = false;
+        var titleCleanupSaveInProgress = false;
+        var titleCorrections = [];
+        var titleCorrectionsRequestInProgress = false;
+        var titleCorrectionsSaveInProgress = false;
+        var titleCorrectionsLoaded = false;
+        var titleCleanupRulesLoaded = false;
+
+        function getValue(object, pascalName, camelName) {
+            if (!object) {
+                return '';
+            }
+
+            return object[pascalName] !== undefined
+                ? object[pascalName]
+                : (object[camelName] !== undefined
+                    ? object[camelName]
+                    : '');
+        }
+
+        function addText(parent, className, value, tagName) {
+            var element = document.createElement(tagName || 'div');
+            element.className = className;
+            element.textContent = value || '';
+            parent.appendChild(element);
+            return element;
+        }
+
+        // Preserve the user's position when inline editors or station lists are
+        // updated. Emby may scroll the page window or an internal page container,
+        // so capture both instead of assuming window.scrollY is the only scroller.
+        function captureRadioMetaScrollPosition() {
+            var snapshot = {
+                windowX: window.pageXOffset || 0,
+                windowY: window.pageYOffset || 0,
+                elements: []
+            };
+            var element = view;
+            while (element && element.nodeType === 1) {
+                var style = null;
+                try { style = window.getComputedStyle ? window.getComputedStyle(element) : null; } catch (ignore) { }
+                var overflow = style ? String(style.overflow || '') + ' ' + String(style.overflowY || '') + ' ' + String(style.overflowX || '') : '';
+                if (element.scrollHeight > element.clientHeight + 1 ||
+                    element.scrollWidth > element.clientWidth + 1 || /auto|scroll/i.test(overflow)) {
+                    snapshot.elements.push({ element: element, top: element.scrollTop || 0, left: element.scrollLeft || 0 });
+                }
+                element = element.parentElement;
+            }
+            var scrollingElement = document.scrollingElement;
+            if (scrollingElement && !snapshot.elements.some(function (entry) { return entry.element === scrollingElement; })) {
+                snapshot.elements.push({ element: scrollingElement, top: scrollingElement.scrollTop || 0, left: scrollingElement.scrollLeft || 0 });
+            }
+            return snapshot;
+        }
+
+        function restoreRadioMetaScrollPosition(snapshot) {
+            if (!snapshot) return;
+            function applyPosition() {
+                (snapshot.elements || []).forEach(function (entry) {
+                    if (entry.element && (entry.element.isConnected !== false)) {
+                        entry.element.scrollTop = entry.top;
+                        entry.element.scrollLeft = entry.left;
+                    }
+                });
+                try { window.scrollTo(snapshot.windowX || 0, snapshot.windowY || 0); } catch (ignore) { }
+            }
+            if (typeof window.requestAnimationFrame === 'function') {
+                window.requestAnimationFrame(function () {
+                    window.requestAnimationFrame(applyPosition);
+                });
+            } else {
+                applyPosition();
+            }
+        }
+
+        function focusRadioMetaWithoutScrolling(element, selectText) {
+            if (!element || typeof element.focus !== 'function') return;
+            try { element.focus({ preventScroll: true }); }
+            catch (ignore) { element.focus(); }
+            if (selectText && typeof element.select === 'function') element.select();
+        }
+
+        function formatPlayedAt(value) {
+            if (!value) {
+                return '';
+            }
+
+            var date = new Date(value);
+            if (isNaN(date.getTime())) {
+                return String(value);
+            }
+
+            return date.toLocaleString();
+        }
+
+        function showError(status, error) {
+            var message = error && error.message
+                ? error.message
+                : String(error || 'Unknown error');
+
+            status.textContent = 'Unable to load play history: ' + message;
+            console.error('Radio Meta history:', error);
+        }
+
+        function makeTrashIcon(button) {
+            var ns = 'http://www.w3.org/2000/svg';
+            var svg = document.createElementNS(ns, 'svg');
+            svg.setAttribute('viewBox', '0 0 24 24');
+            svg.setAttribute('aria-hidden', 'true');
+            svg.setAttribute('focusable', 'false');
+            svg.setAttribute('fill', 'none');
+            svg.setAttribute('stroke', 'currentColor');
+            svg.setAttribute('stroke-width', '2');
+            svg.setAttribute('stroke-linecap', 'round');
+            svg.setAttribute('stroke-linejoin', 'round');
+
+            var paths = [
+                'M3 6h18',
+                'M8 6V4h8v2',
+                'M19 6l-1 14H6L5 6',
+                'M10 10v6',
+                'M14 10v6'
+            ];
+            paths.forEach(function (pathData) {
+                var path = document.createElementNS(ns, 'path');
+                path.setAttribute('d', pathData);
+                svg.appendChild(path);
+            });
+            button.appendChild(svg);
+        }
+
+        function makePencilIcon(button) {
+            var ns = 'http://www.w3.org/2000/svg';
+            var svg = document.createElementNS(ns, 'svg');
+            svg.setAttribute('viewBox', '0 0 24 24');
+            svg.setAttribute('aria-hidden', 'true');
+            svg.setAttribute('focusable', 'false');
+            svg.setAttribute('fill', 'none');
+            svg.setAttribute('stroke', 'currentColor');
+            svg.setAttribute('stroke-width', '2');
+            svg.setAttribute('stroke-linecap', 'round');
+            svg.setAttribute('stroke-linejoin', 'round');
+            ['M12 20h9', 'M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z'].forEach(function (pathData) {
+                var path = document.createElementNS(ns, 'path');
+                path.setAttribute('d', pathData);
+                svg.appendChild(path);
+            });
+            button.appendChild(svg);
+        }
+
+
+        var stationScanInProgress = false;
+        var stationFolderPanelVisible = false;
+
+        // Report bounded outcomes for station-file actions to the server-side diagnostic
+        // history. These calls deliberately omit paths, stream URLs, library item IDs,
+        // proxy tokens and raw error text. Diagnostics are best-effort and never block
+        // the station operation or playback.
+        function reportStationOperationResult(operationData, results) {
+            var operationId = String(getValue(operationData, 'DiagnosticOperationId', 'diagnosticOperationId') || '').trim();
+            if (!operationId) return Promise.resolve(null);
+            var payload = { OperationId: operationId };
+            if (results && results.libraryRefreshStatus) payload.LibraryRefreshStatus = results.libraryRefreshStatus;
+            if (results && results.stationListRefreshStatus) payload.StationListRefreshStatus = results.stationListRefreshStatus;
+            if (!payload.LibraryRefreshStatus && !payload.StationListRefreshStatus) return Promise.resolve(null);
+            return ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('RadioMeta/Diagnostics/StationOperationResult'),
+                data: JSON.stringify(payload),
+                contentType: 'application/json',
+                dataType: 'json'
+            }).catch(function () { return null; });
+        }
+
+        function recordStationOperationFailure(operation, stationName, failureCode) {
+            var safeOperation = String(operation || '').trim();
+            if (!safeOperation) return Promise.resolve(null);
+            return ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('RadioMeta/Diagnostics/StationOperationResult'),
+                data: JSON.stringify({
+                    Operation: safeOperation,
+                    StationName: String(stationName || '').slice(0, 100),
+                    FailureCode: failureCode === 'server-rejected' || failureCode === 'response-unexpected'
+                        ? failureCode : 'request-failed'
+                }),
+                contentType: 'application/json',
+                dataType: 'json'
+            }).catch(function () { return null; });
+        }
+
+        // Uses the same native Emby operation as Dashboard > Scan library files
+        // for one library root, with Recursive=true. The server resolves the
+        // appropriate library ID from the configured Station Folder; no IDs or
+        // credentials are hard-coded here. Report only whether Emby accepted the
+        // request; the actual library scan continues in Emby's background.
+        function requestTargetedLibraryRefresh(operationData) {
+            var targetFound = getValue(operationData, 'LibraryScanTargetFound', 'libraryScanTargetFound') === true;
+            var itemId = String(getValue(operationData, 'LibraryScanItemId', 'libraryScanItemId') || '').trim();
+            var libraryName = String(getValue(operationData, 'LibraryScanLibraryName', 'libraryScanLibraryName') || '').trim();
+            var libraryLocation = String(getValue(operationData, 'LibraryScanLocation', 'libraryScanLocation') || '').trim();
+            var resolutionMessage = String(getValue(operationData, 'LibraryScanMessage', 'libraryScanMessage') || '').trim();
+
+            if (!targetFound || !itemId) {
+                return reportStationOperationResult(operationData, { libraryRefreshStatus: 'no-target' }).then(function () {
+                    return {
+                        queued: false,
+                        message: (resolutionMessage ? resolutionMessage + ' ' : '') +
+                            'Emby did not receive a library scan request. Use the Emby Scan library files command after confirming the Station Folder belongs to a library.'
+                    };
+                });
+            }
+
+            var url = ApiClient.getUrl('Items/' + encodeURIComponent(itemId) + '/Refresh');
+            var refreshOptions = 'Recursive=true&ImageRefreshMode=Default&MetadataRefreshMode=Default&ReplaceAllImages=false&ReplaceAllMetadata=false';
+            url += (url.indexOf('?') >= 0 ? '&' : '?') + refreshOptions;
+
+            return ApiClient.ajax({ type: 'POST', url: url }).then(function () {
+                return reportStationOperationResult(operationData, { libraryRefreshStatus: 'accepted' }).then(function () {
+                    return {
+                        queued: true,
+                        message: 'Emby accepted a recursive library refresh for "' + (libraryName || 'the matching library') + '"' +
+                            (libraryLocation ? ' (' + libraryLocation + ')' : '') + '. The scan runs in the background.'
+                    };
+                });
+            }).catch(function (error) {
+                // Do not store/display the URL or arbitrary error text: Emby clients
+                // may include authentication query parameters in URLs.
+                var detail = error && (error.statusText || error.status)
+                    ? String(error.statusText || error.status)
+                    : 'the request failed';
+                return reportStationOperationResult(operationData, { libraryRefreshStatus: 'failed' }).then(function () {
+                    return {
+                        queued: false,
+                        message: 'The station file operation succeeded, but Emby did not accept the targeted library refresh (' + detail + '). Use the Emby Scan library files command if the change does not appear.'
+                    };
+                });
+            });
+        }
+

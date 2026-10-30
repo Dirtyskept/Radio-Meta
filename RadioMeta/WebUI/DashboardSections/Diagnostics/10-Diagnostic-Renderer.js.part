@@ -1,0 +1,290 @@
+        function diagnosticRender(checks, headerLines, recentEvents, performance) {
+            recentEvents = Array.isArray(recentEvents) ? recentEvents : [];
+            performance = performance && typeof performance === 'object' ? performance : null;
+            var results = view.querySelector('#radioDiagnosticsResults');
+            var summary = view.querySelector('#radioDiagnosticsSummary');
+            var checkList = view.querySelector('#radioDiagnosticsChecks');
+            var eventsSection = view.querySelector('#radioDiagnosticsEvents');
+            var eventList = view.querySelector('#radioDiagnosticsEventList');
+            var performanceSection = view.querySelector('#radioDiagnosticsPerformance');
+            var performanceSummary = view.querySelector('#radioDiagnosticsPerformanceSummary');
+            var performanceList = view.querySelector('#radioDiagnosticsPerformanceList');
+            var report = view.querySelector('#radioDiagnosticsReport');
+            var status = view.querySelector('#radioDiagnosticsStatus');
+            var runButton = view.querySelector('#radioDiagnosticsRun');
+            var copyButton = view.querySelector('#radioDiagnosticsCopy');
+            if (!results || !summary || !checkList || !report || !status) return;
+
+            var passCount = checks.filter(function (item) { return item.status === 'PASS'; }).length;
+            var warnCount = checks.filter(function (item) { return item.status === 'WARN'; }).length;
+            var failCount = checks.filter(function (item) { return item.status === 'FAIL'; }).length;
+            var infoCount = checks.filter(function (item) { return item.status === 'INFO'; }).length;
+
+            summary.textContent = failCount
+                ? 'Diagnostics completed: ' + failCount + ' FAIL, ' + warnCount + ' WARN, ' + passCount + ' PASS, ' + infoCount + ' INFO. Start with the FAIL items.'
+                : warnCount
+                    ? 'Diagnostics completed: ' + warnCount + ' WARN, ' + passCount + ' PASS, no FAIL items, ' + infoCount + ' INFO. Review WARN items.'
+                    : infoCount
+                        ? 'Diagnostics completed: ' + passCount + ' checks passed; ' + infoCount + ' additional checks could not be verified in this page.'
+                        : 'Diagnostics completed: all ' + passCount + ' checks passed.';
+
+            while (checkList.firstChild) checkList.removeChild(checkList.firstChild);
+            checks.forEach(function (item) {
+                var row = document.createElement('div');
+                row.className = 'radio-diagnostic-check';
+                var state = document.createElement('span');
+                state.className = 'radio-diagnostic-status ' + item.status.toLowerCase();
+                state.textContent = item.status;
+                var name = document.createElement('strong');
+                name.textContent = item.name;
+                var detail = document.createElement('span');
+                detail.className = 'radio-diagnostic-detail';
+                detail.textContent = item.detail;
+                row.appendChild(state);
+                row.appendChild(name);
+                row.appendChild(detail);
+                checkList.appendChild(row);
+            });
+
+            if (performanceSection && performanceSummary && performanceList) {
+                while (performanceSummary.firstChild) performanceSummary.removeChild(performanceSummary.firstChild);
+                while (performanceList.firstChild) performanceList.removeChild(performanceList.firstChild);
+                var perfSamples = performance && Array.isArray(diagnosticValue(performance, 'RecentSamples', 'recentSamples'))
+                    ? diagnosticValue(performance, 'RecentSamples', 'recentSamples') : [];
+                if (performance) {
+                    performanceSection.style.display = '';
+                    var performanceInsights = diagnosticPerformanceInsights(performance);
+                    var metricValues = [
+                        ['Network lookups / uncached', (diagnosticValue(performance, 'NetworkLookupCount', 'networkLookupCount') || 0) + ' / ' + (diagnosticValue(performance, 'UncachedNetworkLookupCount', 'uncachedNetworkLookupCount') || 0)],
+                        ['Cache hit rate', performanceInsights && performanceInsights.cacheHitRatePercent !== null ? performanceInsights.cacheHitRatePercent.toFixed(1) + '% (' + performanceInsights.cacheHits + '/' + performanceInsights.networkCount + ')' : 'n/a'],
+                        ['Avg / max uncached lookup', Number(diagnosticValue(performance, 'AverageNetworkLookupMs', 'averageNetworkLookupMs') || 0).toFixed(1) + ' / ' + Number(diagnosticValue(performance, 'MaxNetworkLookupMs', 'maxNetworkLookupMs') || 0).toFixed(1) + ' ms'],
+                        ['Recent p95 uncached lookup', performanceInsights && performanceInsights.recentP95UncachedMs !== null ? performanceInsights.recentP95UncachedMs.toFixed(1) + ' ms (up to 24 samples)' : 'n/a'],
+                        ['Recent avg Shoutcast / ICY', performanceInsights ? (performanceInsights.recentAverageShoutcastMs === null ? 'n/a' : performanceInsights.recentAverageShoutcastMs.toFixed(1) + ' ms') + ' / ' + (performanceInsights.recentAverageIcyMs === null ? 'n/a' : performanceInsights.recentAverageIcyMs.toFixed(1) + ' ms') : 'n/a'],
+                        ['Direct ICY reads', diagnosticValue(performance, 'DirectIcyReadCount', 'directIcyReadCount') || 0],
+                        ['Avg ICY time / intervals', Number(diagnosticValue(performance, 'AverageIcyDurationMs', 'averageIcyDurationMs') || 0).toFixed(1) + ' ms / ' + Number(diagnosticValue(performance, 'AverageIcyIntervalsAttempted', 'averageIcyIntervalsAttempted') || 0).toFixed(1)],
+                        ['FFprobe launches', (diagnosticValue(performance, 'FfprobeStartedCount', 'ffprobeStartedCount') || 0) + ' of ' + (diagnosticValue(performance, 'FfprobeAttemptCount', 'ffprobeAttemptCount') || 0) + ' attempts'],
+                        ['FFprobe non-success outcomes', diagnosticValue(performance, 'FfprobeNonSuccessCount', 'ffprobeNonSuccessCount') || 0],
+                        ['Avg / max FFprobe', Number(diagnosticValue(performance, 'AverageFfprobeDurationMs', 'averageFfprobeDurationMs') || 0).toFixed(1) + ' / ' + Number(diagnosticValue(performance, 'MaxFfprobeDurationMs', 'maxFfprobeDurationMs') || 0).toFixed(1) + ' ms']
+                    ];
+                    metricValues.forEach(function (metric) {
+                        var card = document.createElement('div');
+                        card.className = 'radio-diagnostic-performance-metric';
+                        var label = document.createElement('span');
+                        label.className = 'radio-diagnostic-performance-label';
+                        label.textContent = metric[0];
+                        var value = document.createElement('strong');
+                        value.textContent = String(metric[1]);
+                        card.appendChild(label);
+                        card.appendChild(value);
+                        performanceSummary.appendChild(card);
+                    });
+                    if (perfSamples.length) {
+                        perfSamples.slice(0, 24).forEach(function (sample) {
+                            var operation = String(diagnosticValue(sample, 'Operation', 'operation') || 'Operation');
+                            var station = String(diagnosticValue(sample, 'StationName', 'stationName') || 'Unknown station');
+                            var outcome = String(diagnosticValue(sample, 'Outcome', 'outcome') || 'unknown');
+                            var timestamp = String(diagnosticValue(sample, 'TimestampUtc', 'timestampUtc') || '');
+                            var row = document.createElement('article');
+                            row.className = 'radio-diagnostic-performance-row' + (outcome === 'success' || outcome === 'title-found' ? ' performance-success' : outcome === 'timeout' || outcome === 'exception' || outcome.indexOf('error') >= 0 ? ' performance-warning' : '');
+                            var heading = document.createElement('div');
+                            heading.className = 'radio-diagnostic-performance-row-heading';
+                            var title = document.createElement('strong');
+                            title.textContent = operation + ' · ' + station;
+                            var time = document.createElement('time');
+                            time.textContent = timestamp ? timestamp.replace('T', ' ').replace(/\.\d+\+00:00$/, 'Z').replace('+00:00', 'Z') : 'Time unavailable';
+                            heading.appendChild(title);
+                            heading.appendChild(time);
+                            row.appendChild(heading);
+                            var details = document.createElement('div');
+                            details.className = 'radio-diagnostic-performance-details';
+                            var detailParts = ['duration=' + Number(diagnosticValue(sample, 'DurationMs', 'durationMs') || 0).toFixed(1) + ' ms', 'outcome=' + outcome];
+                            if (operation === 'Network lookup') {
+                                if (diagnosticValue(sample, 'ShoutcastAttempted', 'shoutcastAttempted') === false) {
+                                    detailParts.push('Shoutcast=not attempted');
+                                } else if (diagnosticValue(sample, 'ShoutcastCancelled', 'shoutcastCancelled') === true) {
+                                    detailParts.push('Shoutcast=cancelled early (partial time not averaged)');
+                                } else {
+                                    detailParts.push('Shoutcast=' + Number(diagnosticValue(sample, 'ShoutcastDurationMs', 'shoutcastDurationMs') || 0).toFixed(1) + ' ms');
+                                }
+                                if (diagnosticValue(sample, 'IcyAttempted', 'icyAttempted') === true) {
+                                    if (diagnosticValue(sample, 'IcyCancelled', 'icyCancelled') === true) {
+                                        detailParts.push('ICY=cancelled early (partial time not averaged)');
+                                    } else {
+                                        detailParts.push('ICY=' + Number(diagnosticValue(sample, 'IcyDurationMs', 'icyDurationMs') || 0).toFixed(1) + ' ms');
+                                    }
+                                    detailParts.push('intervals=' + Number(diagnosticValue(sample, 'IcyIntervalsAttempted', 'icyIntervalsAttempted') || 0));
+                                } else {
+                                    detailParts.push('ICY=not attempted');
+                                }
+                                if (diagnosticValue(sample, 'CacheHit', 'cacheHit') === true) detailParts.push('cache hit');
+                                var resultSource = String(diagnosticValue(sample, 'ResultSource', 'resultSource') || '');
+                                if (resultSource) detailParts.push('result=' + resultSource);
+                            } else if (operation === 'FFprobe process') {
+                                detailParts.push('process started=' + (diagnosticValue(sample, 'ProcessStarted', 'processStarted') === true ? 'yes' : 'no'));
+                            }
+                            details.textContent = detailParts.join(' · ');
+                            row.appendChild(details);
+                            performanceList.appendChild(row);
+                        });
+                    } else {
+                        var noSamples = document.createElement('p');
+                        noSamples.className = 'radio-diagnostics-no-performance';
+                        noSamples.textContent = 'No performance samples yet. Start a station and run diagnostics after a lookup occurs.';
+                        performanceList.appendChild(noSamples);
+                    }
+                } else {
+                    performanceSection.style.display = 'none';
+                }
+            }
+
+            if (eventList && eventsSection) {
+                while (eventList.firstChild) eventList.removeChild(eventList.firstChild);
+                if (recentEvents.length) {
+                    eventsSection.style.display = '';
+                    recentEvents.slice(0, 40).forEach(function (entry) {
+                        var item = function (pascal, camel) { return diagnosticValue(entry, pascal, camel); };
+                        var eventStatus = String(item('Status', 'status') || 'info').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+                        var station = String(item('StationName', 'stationName') || 'Unknown station');
+                        var source = String(item('Source', 'source') || 'Metadata reader');
+                        var title = String(item('Title', 'title') || item('RawMetadata', 'rawMetadata') || '');
+                        var artist = String(item('Artist', 'artist') || '');
+                        var details = String(item('Details', 'details') || '');
+                        var timestamp = String(item('TimestampUtc', 'timestampUtc') || '');
+                        var row = document.createElement('article');
+                        row.className = 'radio-diagnostic-event event-' + eventStatus;
+                        var meta = document.createElement('div');
+                        meta.className = 'radio-diagnostic-event-meta';
+                        var statusText = document.createElement('span');
+                        statusText.className = 'radio-diagnostic-event-status';
+                        statusText.textContent = eventStatus || 'info';
+                        var context = document.createElement('span');
+                        context.textContent = station + ' · ' + source;
+                        var time = document.createElement('time');
+                        time.textContent = timestamp ? timestamp.replace('T', ' ').replace(/\.\d+\+00:00$/, 'Z').replace('+00:00', 'Z') : 'Time unavailable';
+                        meta.appendChild(statusText);
+                        meta.appendChild(context);
+                        meta.appendChild(time);
+                        row.appendChild(meta);
+                        if (title || artist) {
+                            var titleNode = document.createElement('div');
+                            titleNode.className = 'radio-diagnostic-event-title';
+                            titleNode.textContent = (artist ? artist + ' — ' : '') + title;
+                            row.appendChild(titleNode);
+                        }
+                        if (details) {
+                            var detailNode = document.createElement('div');
+                            detailNode.className = 'radio-diagnostic-event-details';
+                            detailNode.textContent = details;
+                            row.appendChild(detailNode);
+                        }
+                        eventList.appendChild(row);
+                    });
+                } else {
+                    eventsSection.style.display = '';
+                    var noEvents = document.createElement('p');
+                    noEvents.className = 'radio-diagnostic-no-events';
+                    noEvents.textContent = 'No recent metadata-reader events are recorded. Start a radio station, wait for an update, then run diagnostics again.';
+                    eventList.appendChild(noEvents);
+                }
+            }
+
+            var reportLines = headerLines.slice();
+            reportLines.push('');
+            reportLines.push('SUMMARY: ' + passCount + ' PASS, ' + warnCount + ' WARN, ' + failCount + ' FAIL, ' + infoCount + ' INFO');
+            reportLines.push('');
+            checks.forEach(function (item) {
+                reportLines.push('[' + item.status + '] ' + item.name + ': ' + item.detail);
+            });
+            reportLines.push('');
+            reportLines.push('PERFORMANCE MEASUREMENTS (rolling in-memory window; up to 120 most-recent samples; resets on restart):');
+            if (performance) {
+                var reportPerformanceInsights = diagnosticPerformanceInsights(performance);
+                reportLines.push('  Retained samples: ' + (diagnosticValue(performance, 'RetainedSampleCount', 'retainedSampleCount') || 0));
+                reportLines.push('  Network lookups: ' + (diagnosticValue(performance, 'NetworkLookupCount', 'networkLookupCount') || 0) +
+                    '; cache hits: ' + (diagnosticValue(performance, 'NetworkCacheHitCount', 'networkCacheHitCount') || 0) +
+                    '; uncached lookups: ' + (diagnosticValue(performance, 'UncachedNetworkLookupCount', 'uncachedNetworkLookupCount') || 0) +
+                    '; cache hit rate: ' + (reportPerformanceInsights && reportPerformanceInsights.cacheHitRatePercent !== null ? reportPerformanceInsights.cacheHitRatePercent.toFixed(1) + '%' : 'n/a') +
+                    '; average/max uncached: ' + Number(diagnosticValue(performance, 'AverageNetworkLookupMs', 'averageNetworkLookupMs') || 0).toFixed(1) + '/' + Number(diagnosticValue(performance, 'MaxNetworkLookupMs', 'maxNetworkLookupMs') || 0).toFixed(1) + ' ms');
+                if (reportPerformanceInsights) {
+                    reportLines.push('  Recent stage timing (up to 24 recent network samples; uncached only; excludes cancelled partial requests): Shoutcast average=' + (reportPerformanceInsights.recentAverageShoutcastMs === null ? 'n/a' : reportPerformanceInsights.recentAverageShoutcastMs.toFixed(1) + ' ms') +
+                        '; ICY average=' + (reportPerformanceInsights.recentAverageIcyMs === null ? 'n/a' : reportPerformanceInsights.recentAverageIcyMs.toFixed(1) + ' ms') +
+                        '; uncached lookup p95=' + (reportPerformanceInsights.recentP95UncachedMs === null ? 'n/a' : reportPerformanceInsights.recentP95UncachedMs.toFixed(1) + ' ms') +
+                        '; recent result sources: ' + reportPerformanceInsights.recentResultSummary);
+                }
+                reportLines.push('  Direct ICY reads: ' + (diagnosticValue(performance, 'DirectIcyReadCount', 'directIcyReadCount') || 0) +
+                    '; average duration: ' + Number(diagnosticValue(performance, 'AverageIcyDurationMs', 'averageIcyDurationMs') || 0).toFixed(1) + ' ms' +
+                    '; average intervals attempted: ' + Number(diagnosticValue(performance, 'AverageIcyIntervalsAttempted', 'averageIcyIntervalsAttempted') || 0).toFixed(1) + '; cancelled partial reads excluded from timing averages');
+                reportLines.push('  FFprobe attempts/process launches/non-success outcomes: ' + (diagnosticValue(performance, 'FfprobeAttemptCount', 'ffprobeAttemptCount') || 0) + '/' +
+                    (diagnosticValue(performance, 'FfprobeStartedCount', 'ffprobeStartedCount') || 0) + '/' + (diagnosticValue(performance, 'FfprobeNonSuccessCount', 'ffprobeNonSuccessCount') || 0) +
+                    '; average/max launched-process time: ' + Number(diagnosticValue(performance, 'AverageFfprobeDurationMs', 'averageFfprobeDurationMs') || 0).toFixed(1) + '/' + Number(diagnosticValue(performance, 'MaxFfprobeDurationMs', 'maxFfprobeDurationMs') || 0).toFixed(1) + ' ms');
+                reportLines.push('  Recent samples (newest first):');
+                (diagnosticValue(performance, 'RecentSamples', 'recentSamples') || []).slice(0, 24).forEach(function (sample) {
+                    var op = String(diagnosticValue(sample, 'Operation', 'operation') || 'Operation');
+                    var station = String(diagnosticValue(sample, 'StationName', 'stationName') || 'Unknown station');
+                    var time = String(diagnosticValue(sample, 'TimestampUtc', 'timestampUtc') || 'unknown time');
+                    var duration = Number(diagnosticValue(sample, 'DurationMs', 'durationMs') || 0).toFixed(1);
+                    var outcome = String(diagnosticValue(sample, 'Outcome', 'outcome') || 'unknown');
+                    var extras = [];
+                    if (op === 'Network lookup') {
+                        if (diagnosticValue(sample, 'ShoutcastAttempted', 'shoutcastAttempted') === false) {
+                            extras.push('Shoutcast not attempted');
+                        } else if (diagnosticValue(sample, 'ShoutcastCancelled', 'shoutcastCancelled') === true) {
+                            extras.push('Shoutcast cancelled early; partial time excluded from averages');
+                        } else {
+                            extras.push('Shoutcast=' + Number(diagnosticValue(sample, 'ShoutcastDurationMs', 'shoutcastDurationMs') || 0).toFixed(1) + 'ms');
+                        }
+                        if (diagnosticValue(sample, 'IcyAttempted', 'icyAttempted') === true) {
+                            if (diagnosticValue(sample, 'IcyCancelled', 'icyCancelled') === true) {
+                                extras.push('ICY cancelled early; partial time excluded from averages');
+                            } else {
+                                extras.push('ICY=' + Number(diagnosticValue(sample, 'IcyDurationMs', 'icyDurationMs') || 0).toFixed(1) + 'ms');
+                            }
+                            extras.push('intervals=' + Number(diagnosticValue(sample, 'IcyIntervalsAttempted', 'icyIntervalsAttempted') || 0));
+                        } else extras.push('ICY not attempted');
+                        if (diagnosticValue(sample, 'CacheHit', 'cacheHit') === true) extras.push('cache hit');
+                        var source = String(diagnosticValue(sample, 'ResultSource', 'resultSource') || '');
+                        if (source) extras.push('result=' + source);
+                    } else if (op === 'FFprobe process') {
+                        extras.push('process started=' + (diagnosticValue(sample, 'ProcessStarted', 'processStarted') === true ? 'yes' : 'no'));
+                    }
+                    reportLines.push('    [' + time + '] ' + op + ' | ' + station + ' | ' + duration + 'ms | ' + outcome + (extras.length ? ' | ' + extras.join('; ') : ''));
+                });
+            } else {
+                reportLines.push('  Performance measurements are unavailable in this plugin build.');
+            }
+            reportLines.push('');
+            reportLines.push('RECENT METADATA ACTIVITY (newest first; titles are marked for visibility):');
+            if (recentEvents.length) {
+                recentEvents.slice(0, 40).forEach(function (entry) {
+                    var status = String(diagnosticValue(entry, 'Status', 'status') || 'info').toUpperCase();
+                    var station = String(diagnosticValue(entry, 'StationName', 'stationName') || 'Unknown station');
+                    var source = String(diagnosticValue(entry, 'Source', 'source') || 'Metadata reader');
+                    var title = String(diagnosticValue(entry, 'Title', 'title') || diagnosticValue(entry, 'RawMetadata', 'rawMetadata') || '');
+                    var artist = String(diagnosticValue(entry, 'Artist', 'artist') || '');
+                    var detail = String(diagnosticValue(entry, 'Details', 'details') || '');
+                    var timestamp = String(diagnosticValue(entry, 'TimestampUtc', 'timestampUtc') || 'unknown time');
+                    var displayedTitle = (artist ? artist + ' — ' : '') + title;
+                    reportLines.push('[' + timestamp + '] [' + status + '] ' + station + ' / ' + source +
+                        (displayedTitle ? '  >>> TITLE: ' + displayedTitle + ' <<<' : '') +
+                        (detail ? ' — ' + detail : ''));
+                });
+            } else {
+                reportLines.push('No recent metadata-reader events were recorded.');
+            }
+            reportLines.push('');
+            reportLines.push('Privacy: report excludes stream URLs, query tokens, access tokens, filesystem paths, session IDs, and device IDs.');
+            report.textContent = reportLines.join('\n');
+            results.style.display = '';
+            diagnosticSetCopyButtonVisible(true);
+            status.textContent = failCount
+                ? 'Diagnostics finished. One or more checks need attention.'
+                : warnCount
+                    ? 'Diagnostics finished. Some items could not be verified in this page.'
+                    : 'Diagnostics finished successfully.';
+            if (runButton) {
+                runButton.disabled = false;
+                runButton.innerHTML = '<span>Run diagnostics again</span>';
+            }
+            if (copyButton) copyButton.disabled = false;
+        }
+

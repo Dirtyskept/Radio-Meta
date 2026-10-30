@@ -1,0 +1,221 @@
+        function getCleanupStation(rule) {
+            return String(getValue(rule, 'StationName', 'stationName') || '').trim();
+        }
+
+        function getCleanupType(rule) {
+            var type = String(getValue(rule, 'RuleType', 'ruleType') || 'TrailingBracketCode4').trim();
+            var lower = type.toLowerCase();
+            if (lower === 'exactsuffix') return 'ExactSuffix';
+            if (lower === 'trailingsquarebracketany') return 'TrailingSquareBracketAny';
+            if (lower === 'trailingparenthesisany') return 'TrailingParenthesisAny';
+            return 'TrailingBracketCode4';
+        }
+
+        function getCleanupSuffix(rule) {
+            return String(getValue(rule, 'Suffix', 'suffix') || '').trim();
+        }
+
+        function getCleanupPreserveLabels(rule) {
+            return String(getValue(rule, 'PreserveLabels', 'preserveLabels') || '').trim();
+        }
+
+        function updateSavedTitleFixesStatus(message) {
+            var status = view.querySelector('#radioTitleFixesStatus');
+            if (!status) return;
+            if (message) {
+                status.textContent = message;
+                return;
+            }
+            if (!titleCorrectionsLoaded || !titleCleanupRulesLoaded) {
+                status.textContent = 'Loading saved title fixes...';
+                return;
+            }
+            var exactCount = titleCorrections.length;
+            var cleanupCount = titleCleanupRules.length;
+            if (exactCount === 0 && cleanupCount === 0) {
+                status.textContent = 'No saved title fixes configured yet.';
+            } else {
+                status.textContent = exactCount + ' exact song correction(s) and ' + cleanupCount + ' reusable cleanup rule(s) saved.';
+            }
+        }
+
+        function renderSavedTitleFixes() {
+            var container = view.querySelector('#radioTitleFixes');
+            if (!container) return;
+            container.replaceChildren();
+
+            // The status line above the list is the single empty-state message.
+            // Keep the list itself empty so we don't show duplicate empty notices.
+            if (!titleCorrections.length && !titleCleanupRules.length) return;
+
+            titleCorrections.forEach(function (correction, index) {
+                var row = document.createElement('div');
+                row.className = 'radio-title-correction';
+                var details = document.createElement('div');
+                details.className = 'radio-title-correction-text';
+                addText(details, 'radio-title-cleanup-rule-name', 'This song only · ' + (getValue(correction, 'StationName', 'stationName') || 'Unknown station'), 'strong');
+                addText(details, 'radio-title-correction-scope',
+                    String(getValue(correction, 'OriginalTitle', 'originalTitle') || '') + '  →  ' +
+                    String(getValue(correction, 'CorrectedTitle', 'correctedTitle') || ''));
+                row.appendChild(details);
+                var remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'emby-button raised radio-title-correction-remove';
+                remove.textContent = 'Remove';
+                remove.setAttribute('data-title-correction-index', String(index));
+                remove.setAttribute('aria-label', 'Remove exact title correction ' + (index + 1));
+                row.appendChild(remove);
+                container.appendChild(row);
+            });
+
+            titleCleanupRules.forEach(function (rule, index) {
+                var station = getCleanupStation(rule);
+                var type = getCleanupType(rule);
+                var suffix = getCleanupSuffix(rule);
+                var preserve = getCleanupPreserveLabels(rule);
+                var ruleLabel = type === 'ExactSuffix'
+                    ? 'Remove exact suffix: ' + suffix
+                    : type === 'TrailingSquareBracketAny'
+                        ? 'Remove trailing [bracketed] suffix'
+                        : type === 'TrailingParenthesisAny'
+                            ? 'Remove trailing (parenthetical) suffix'
+                            : 'Remove trailing 4-character bracket code';
+                var row = document.createElement('div');
+                row.className = 'radio-title-cleanup-rule';
+                var details = document.createElement('div');
+                details.className = 'radio-title-cleanup-rule-text';
+                addText(details, 'radio-title-cleanup-rule-name', (station || 'All stations') + ' · ' + ruleLabel, 'strong');
+                var detailText = [];
+                if (preserve && type !== 'ExactSuffix') detailText.push('Additional labels to preserve: ' + preserve);
+                addText(details, 'radio-title-cleanup-rule-scope', detailText.join(' · '));
+                row.appendChild(details);
+                var remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'emby-button raised radio-title-cleanup-remove';
+                remove.textContent = 'Remove';
+                remove.setAttribute('data-title-cleanup-index', String(index));
+                remove.setAttribute('aria-label', 'Remove saved title cleanup rule ' + (index + 1));
+                row.appendChild(remove);
+                container.appendChild(row);
+            });
+        }
+
+        function loadTitleCorrections() {
+            if (titleCorrectionsRequestInProgress) return;
+            titleCorrectionsRequestInProgress = true;
+            ApiClient.getJSON(ApiClient.getUrl('RadioMeta/TitleCorrections'))
+                .then(function (data) {
+                    var error = getValue(data, 'Error', 'error');
+                    if (error) throw new Error(error);
+                    titleCorrections = getValue(data, 'Corrections', 'corrections') || [];
+                    titleCorrectionsLoaded = true;
+                    renderSavedTitleFixes();
+                    updateSavedTitleFixesStatus();
+                })
+                .catch(function (error) {
+                    titleCorrectionsLoaded = true;
+                    updateSavedTitleFixesStatus('Unable to load exact title corrections: ' + (error && error.message ? error.message : String(error)));
+                    console.error('Radio Meta title correction load:', error);
+                })
+                .finally(function () { titleCorrectionsRequestInProgress = false; });
+        }
+
+        function saveTitleCorrections(nextCorrections) {
+            var status = view.querySelector('#radioTitleFixesStatus');
+            if (!status || titleCorrectionsSaveInProgress) return;
+            var previous = titleCorrections;
+            titleCorrectionsSaveInProgress = true;
+            view.querySelectorAll('.radio-title-correction-remove').forEach(function (button) { button.disabled = true; });
+            status.textContent = 'Saving exact title corrections to the plugin XML...';
+            ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('RadioMeta/TitleCorrections'),
+                data: JSON.stringify({ Corrections: nextCorrections }),
+                contentType: 'application/json'
+            }).then(function (data) {
+                var error = getValue(data, 'Error', 'error');
+                if (error) throw new Error(error);
+                titleCorrections = getValue(data, 'Corrections', 'corrections') || nextCorrections;
+                renderSavedTitleFixes();
+                updateSavedTitleFixesStatus(getValue(data, 'Message', 'message') || 'Exact title corrections saved.');
+            }).catch(function (error) {
+                titleCorrections = previous;
+                renderSavedTitleFixes();
+                updateSavedTitleFixesStatus('Unable to save exact title corrections: ' + (error && error.message ? error.message : String(error)));
+                console.error('Radio Meta exact title correction save:', error);
+            }).finally(function () {
+                titleCorrectionsSaveInProgress = false;
+                view.querySelectorAll('.radio-title-correction-remove').forEach(function (button) { button.disabled = false; });
+            });
+        }
+
+        function loadTitleCleanupRules() {
+            if (titleCleanupRequestInProgress) return;
+            titleCleanupRequestInProgress = true;
+            ApiClient.getJSON(ApiClient.getUrl('RadioMeta/TitleCleanup'))
+                .then(function (data) {
+                    var error = getValue(data, 'Error', 'error');
+                    if (error) throw new Error(error);
+                    titleCleanupRules = getValue(data, 'Rules', 'rules') || [];
+                    titleCleanupRulesLoaded = true;
+                    renderSavedTitleFixes();
+                    updateSavedTitleFixesStatus();
+                })
+                .catch(function (error) {
+                    titleCleanupRulesLoaded = true;
+                    updateSavedTitleFixesStatus('Unable to load reusable title cleanup rules: ' + (error && error.message ? error.message : String(error)));
+                    console.error('Radio Meta title cleanup load:', error);
+                })
+                .finally(function () { titleCleanupRequestInProgress = false; });
+        }
+
+        function saveTitleCleanupRules(nextRules, successMessage) {
+            var status = view.querySelector('#radioTitleFixesStatus');
+            if (!status || titleCleanupSaveInProgress) return;
+            var previousRules = titleCleanupRules;
+            titleCleanupSaveInProgress = true;
+            view.querySelectorAll('.radio-title-cleanup-remove').forEach(function (button) { button.disabled = true; });
+            status.textContent = 'Saving reusable title cleanup rules to the plugin XML...';
+
+            ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('RadioMeta/TitleCleanup'),
+                data: JSON.stringify({ Rules: nextRules }),
+                contentType: 'application/json'
+            }).then(function (data) {
+                var error = getValue(data, 'Error', 'error');
+                if (error) throw new Error(error);
+                titleCleanupRules = getValue(data, 'Rules', 'rules') || nextRules;
+                renderSavedTitleFixes();
+                updateSavedTitleFixesStatus(successMessage || getValue(data, 'Message', 'message') || 'Title cleanup rules saved.');
+            }).catch(function (error) {
+                titleCleanupRules = previousRules;
+                renderSavedTitleFixes();
+                updateSavedTitleFixesStatus('Unable to save title cleanup rules: ' + (error && error.message ? error.message : String(error)));
+                console.error('Radio Meta title cleanup save:', error);
+            }).finally(function () {
+                titleCleanupSaveInProgress = false;
+                view.querySelectorAll('.radio-title-cleanup-remove').forEach(function (button) { button.disabled = false; });
+            });
+        }
+
+        function removeTitleCorrection(indexValue) {
+            if (titleCorrectionsSaveInProgress) return;
+            var index = Number(indexValue);
+            if (!Number.isInteger(index) || index < 0 || index >= titleCorrections.length) return;
+            var correction = titleCorrections[index];
+            var original = String(getValue(correction, 'OriginalTitle', 'originalTitle') || '');
+            if (!window.confirm('Remove this exact correction for "' + original + '"? This stops the rule from being applied to future metadata. Existing history titles are not automatically reverted.')) return;
+            var next = titleCorrections.filter(function (_correction, correctionIndex) { return correctionIndex !== index; });
+            saveTitleCorrections(next);
+        }
+
+        function removeTitleCleanupRule(indexValue) {
+            if (titleCleanupSaveInProgress) return;
+            var index = Number(indexValue);
+            if (!Number.isInteger(index) || index < 0 || index >= titleCleanupRules.length) return;
+            if (!window.confirm('Remove this reusable cleanup rule? Future metadata will no longer use it. Existing history titles are not automatically reverted.')) return;
+            var nextRules = titleCleanupRules.filter(function (_rule, ruleIndex) { return ruleIndex !== index; });
+            saveTitleCleanupRules(nextRules, 'Reusable title cleanup rule removed and saved.');
+        }
+

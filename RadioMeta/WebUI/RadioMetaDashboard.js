@@ -1,6 +1,29 @@
 define([], function () {
     'use strict';
 
+    window.__radioMetaDashboardControllerInfo_v1382 = {
+        version: '1.3.126',
+        initialized: true,
+        sourceMode: 'bundled-source-sections',
+        sections: [
+            'amd-shell-and-helper-bootstrap',
+            'controller-entry-and-common-helpers',
+            'station-folder-panel',
+            'play-history-panel',
+            'station-mode-settings-panel',
+            'ignore-phrases-panel',
+            'saved-title-fixes-panel',
+            'history-actions-and-path-settings',
+            'view-lifecycle-and-station-creation',
+            'diagnostic-probes-and-helpers',
+            'diagnostic-renderer',
+            'diagnostic-runner',
+            'diagnostic-copy-and-fallback',
+            'current-playback-and-stream-test-helpers',
+            'current-station-form-and-controller-wiring'
+        ]
+    };
+
     function ensureIntegratedDisplayHelperForDashboard() {
         var helperKey = '__radioMetaIntegratedDisplay_v1323';
         var loaderStateKey = '__radioMetaDisplayLoaderState_v1366';
@@ -109,6 +132,61 @@ define([], function () {
             element.className = className;
             element.textContent = value || '';
             parent.appendChild(element);
+            return element;
+        }
+
+        // Preserve the user's position when inline editors or station lists are
+        // updated. Emby may scroll the page window or an internal page container,
+        // so capture both instead of assuming window.scrollY is the only scroller.
+        function captureRadioMetaScrollPosition() {
+            var snapshot = {
+                windowX: window.pageXOffset || 0,
+                windowY: window.pageYOffset || 0,
+                elements: []
+            };
+            var element = view;
+            while (element && element.nodeType === 1) {
+                var style = null;
+                try { style = window.getComputedStyle ? window.getComputedStyle(element) : null; } catch (ignore) { }
+                var overflow = style ? String(style.overflow || '') + ' ' + String(style.overflowY || '') + ' ' + String(style.overflowX || '') : '';
+                if (element.scrollHeight > element.clientHeight + 1 ||
+                    element.scrollWidth > element.clientWidth + 1 || /auto|scroll/i.test(overflow)) {
+                    snapshot.elements.push({ element: element, top: element.scrollTop || 0, left: element.scrollLeft || 0 });
+                }
+                element = element.parentElement;
+            }
+            var scrollingElement = document.scrollingElement;
+            if (scrollingElement && !snapshot.elements.some(function (entry) { return entry.element === scrollingElement; })) {
+                snapshot.elements.push({ element: scrollingElement, top: scrollingElement.scrollTop || 0, left: scrollingElement.scrollLeft || 0 });
+            }
+            return snapshot;
+        }
+
+        function restoreRadioMetaScrollPosition(snapshot) {
+            if (!snapshot) return;
+            function applyPosition() {
+                (snapshot.elements || []).forEach(function (entry) {
+                    if (entry.element && (entry.element.isConnected !== false)) {
+                        entry.element.scrollTop = entry.top;
+                        entry.element.scrollLeft = entry.left;
+                    }
+                });
+                try { window.scrollTo(snapshot.windowX || 0, snapshot.windowY || 0); } catch (ignore) { }
+            }
+            if (typeof window.requestAnimationFrame === 'function') {
+                window.requestAnimationFrame(function () {
+                    window.requestAnimationFrame(applyPosition);
+                });
+            } else {
+                applyPosition();
+            }
+        }
+
+        function focusRadioMetaWithoutScrolling(element, selectText) {
+            if (!element || typeof element.focus !== 'function') return;
+            try { element.focus({ preventScroll: true }); }
+            catch (ignore) { element.focus(); }
+            if (selectText && typeof element.select === 'function') element.select();
         }
 
         function formatPlayedAt(value) {
@@ -183,10 +261,48 @@ define([], function () {
         var stationScanInProgress = false;
         var stationFolderPanelVisible = false;
 
+        // Report bounded outcomes for station-file actions to the server-side diagnostic
+        // history. These calls deliberately omit paths, stream URLs, library item IDs,
+        // proxy tokens and raw error text. Diagnostics are best-effort and never block
+        // the station operation or playback.
+        function reportStationOperationResult(operationData, results) {
+            var operationId = String(getValue(operationData, 'DiagnosticOperationId', 'diagnosticOperationId') || '').trim();
+            if (!operationId) return Promise.resolve(null);
+            var payload = { OperationId: operationId };
+            if (results && results.libraryRefreshStatus) payload.LibraryRefreshStatus = results.libraryRefreshStatus;
+            if (results && results.stationListRefreshStatus) payload.StationListRefreshStatus = results.stationListRefreshStatus;
+            if (!payload.LibraryRefreshStatus && !payload.StationListRefreshStatus) return Promise.resolve(null);
+            return ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('RadioMeta/Diagnostics/StationOperationResult'),
+                data: JSON.stringify(payload),
+                contentType: 'application/json',
+                dataType: 'json'
+            }).catch(function () { return null; });
+        }
+
+        function recordStationOperationFailure(operation, stationName, failureCode) {
+            var safeOperation = String(operation || '').trim();
+            if (!safeOperation) return Promise.resolve(null);
+            return ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('RadioMeta/Diagnostics/StationOperationResult'),
+                data: JSON.stringify({
+                    Operation: safeOperation,
+                    StationName: String(stationName || '').slice(0, 100),
+                    FailureCode: failureCode === 'server-rejected' || failureCode === 'response-unexpected'
+                        ? failureCode : 'request-failed'
+                }),
+                contentType: 'application/json',
+                dataType: 'json'
+            }).catch(function () { return null; });
+        }
+
         // Uses the same native Emby operation as Dashboard > Scan library files
         // for one library root, with Recursive=true. The server resolves the
         // appropriate library ID from the configured Station Folder; no IDs or
-        // credentials are hard-coded here.
+        // credentials are hard-coded here. Report only whether Emby accepted the
+        // request; the actual library scan continues in Emby's background.
         function requestTargetedLibraryRefresh(operationData) {
             var targetFound = getValue(operationData, 'LibraryScanTargetFound', 'libraryScanTargetFound') === true;
             var itemId = String(getValue(operationData, 'LibraryScanItemId', 'libraryScanItemId') || '').trim();
@@ -195,10 +311,12 @@ define([], function () {
             var resolutionMessage = String(getValue(operationData, 'LibraryScanMessage', 'libraryScanMessage') || '').trim();
 
             if (!targetFound || !itemId) {
-                return Promise.resolve({
-                    queued: false,
-                    message: (resolutionMessage ? resolutionMessage + ' ' : '') +
-                        'Emby did not receive a library scan request. Use the Emby Scan library files command after confirming the Station Folder belongs to a library.'
+                return reportStationOperationResult(operationData, { libraryRefreshStatus: 'no-target' }).then(function () {
+                    return {
+                        queued: false,
+                        message: (resolutionMessage ? resolutionMessage + ' ' : '') +
+                            'Emby did not receive a library scan request. Use the Emby Scan library files command after confirming the Station Folder belongs to a library.'
+                    };
                 });
             }
 
@@ -207,33 +325,43 @@ define([], function () {
             url += (url.indexOf('?') >= 0 ? '&' : '?') + refreshOptions;
 
             return ApiClient.ajax({ type: 'POST', url: url }).then(function () {
-                return {
-                    queued: true,
-                    message: 'Emby accepted a recursive library refresh for "' + (libraryName || 'the matching library') + '"' +
-                        (libraryLocation ? ' (' + libraryLocation + ')' : '') + '. The scan runs in the background.'
-                };
+                return reportStationOperationResult(operationData, { libraryRefreshStatus: 'accepted' }).then(function () {
+                    return {
+                        queued: true,
+                        message: 'Emby accepted a recursive library refresh for "' + (libraryName || 'the matching library') + '"' +
+                            (libraryLocation ? ' (' + libraryLocation + ')' : '') + '. The scan runs in the background.'
+                    };
+                });
             }).catch(function (error) {
-                // Do not display or log the URL or arbitrary error text: Emby
-                // clients may include authentication query parameters in URLs.
+                // Do not store/display the URL or arbitrary error text: Emby clients
+                // may include authentication query parameters in URLs.
                 var detail = error && (error.statusText || error.status)
                     ? String(error.statusText || error.status)
                     : 'the request failed';
-                return {
-                    queued: false,
-                    message: 'The station file operation succeeded, but Emby did not accept the targeted library refresh (' + detail + '). Use the Emby Scan library files command if the change does not appear.'
-                };
+                return reportStationOperationResult(operationData, { libraryRefreshStatus: 'failed' }).then(function () {
+                    return {
+                        queued: false,
+                        message: 'The station file operation succeeded, but Emby did not accept the targeted library refresh (' + detail + '). Use the Emby Scan library files command if the change does not appear.'
+                    };
+                });
             });
         }
 
-        function scanStationFolder(completionNote) {
+        function scanStationFolder(completionNote, stationOperationData) {
             function withCompletionNote(message) {
                 return completionNote ? message + ' ' + completionNote : message;
             }
             var button = view.querySelector('#radioStationScanButton');
             var status = view.querySelector('#radioStationScanStatus');
             var container = view.querySelector('#radioStationScanResults');
-            if (stationScanInProgress || !button || !status || !container) return;
+            if (stationScanInProgress || !button || !status || !container) {
+                reportStationOperationResult(stationOperationData, {
+                    stationListRefreshStatus: stationScanInProgress ? 'not-run-busy' : 'not-started'
+                });
+                return;
+            }
 
+            var scrollSnapshot = captureRadioMetaScrollPosition();
             stationScanInProgress = true;
             status.textContent = withCompletionNote('Scanning configured Station Folder...');
             container.replaceChildren();
@@ -304,6 +432,7 @@ define([], function () {
                     var detail = payload && typeof payload === 'object' && payload.constructor ? payload.constructor.name : typeof payload;
                     status.textContent = withCompletionNote('Station scan returned an unexpected response format (' + shape + '; ' + detail + '). The server scan itself may have succeeded; no station files were changed.');
                     console.error('Radio Meta station scan response format:', { original: data, normalized: payload });
+                    reportStationOperationResult(stationOperationData, { stationListRefreshStatus: 'unexpected-response' });
                     return;
                 }
                 var error = getValue(payload, 'Error', 'error');
@@ -313,6 +442,7 @@ define([], function () {
                     status.textContent = withCompletionNote(error +
                         (configuredErrorPath ? ' Configured path: ' + configuredErrorPath + '.' : '') +
                         (resolvedErrorPath ? ' Resolved path: ' + resolvedErrorPath + '.' : ''));
+                    reportStationOperationResult(stationOperationData, { stationListRefreshStatus: 'failed' });
                     return;
                 }
                 var stations = getValue(payload, 'Stations', 'stations') || [];
@@ -323,12 +453,15 @@ define([], function () {
                 var directoryErrors = Number(getValue(payload, 'DirectoryErrors', 'directoryErrors')) || 0;
                 if (!stations.length) {
                     status.textContent = withCompletionNote('Scan returned zero stations. Configured path: ' + (configuredFolder || '(not returned)') + '; resolved path: ' + folder + '; directories examined: ' + directoriesExamined + '; .strm files found: ' + scannedFiles + '; directory errors: ' + directoryErrors + '. If the paths are missing, refresh the plugin page and verify the installed DLL and embedded resources match.');
+                    reportStationOperationResult(stationOperationData, { stationListRefreshStatus: 'completed-zero-stations' });
                     return;
                 }
 
                 stations.forEach(function (station) {
                     var row = document.createElement('div');
                     row.className = 'radio-station-scan-row';
+                    var stationDisplayName = String(getValue(station, 'Name', 'name') || '(unnamed station)');
+                    var embyItemId = String(getValue(station, 'EmbyItemId', 'embyItemId') || '').trim();
                     var artworkDataUri = getValue(station, 'ArtworkDataUri', 'artworkDataUri') || '';
                     if (artworkDataUri) {
                         var logo = document.createElement('img');
@@ -336,7 +469,20 @@ define([], function () {
                         logo.alt = '';
                         logo.loading = 'lazy';
                         logo.src = artworkDataUri;
-                        row.appendChild(logo);
+                        if (embyItemId) {
+                            var stationLink = document.createElement('a');
+                            stationLink.className = 'radio-station-artwork-link';
+                            var serverId = ApiClient && typeof ApiClient.serverId === 'function' ? String(ApiClient.serverId() || '') : '';
+                            stationLink.href = window.location.href.split('#')[0] + '#!/item?id=' + encodeURIComponent(embyItemId) +
+                                (serverId ? '&serverId=' + encodeURIComponent(serverId) : '');
+                            stationLink.title = 'Open ' + stationDisplayName + ' in Emby';
+                            stationLink.setAttribute('aria-label', 'Open ' + stationDisplayName + ' in Emby');
+                            stationLink.appendChild(logo);
+                            row.appendChild(stationLink);
+                        } else {
+                            logo.title = 'This station is not currently indexed as an Emby library item.';
+                            row.appendChild(logo);
+                        }
                     } else {
                         var placeholder = document.createElement('div');
                         placeholder.className = 'radio-station-scan-logo-placeholder';
@@ -348,7 +494,7 @@ define([], function () {
                     content.className = 'radio-station-scan-content';
                     var name = document.createElement('div');
                     name.className = 'radio-station-scan-name';
-                    name.textContent = getValue(station, 'Name', 'name') || '(unnamed station)';
+                    name.textContent = stationDisplayName;
                     content.appendChild(name);
 
                     var streamStatus = getValue(station, 'StreamStatus', 'streamStatus') || 'Unknown';
@@ -368,11 +514,13 @@ define([], function () {
                     var editButton = document.createElement('button');
                     editButton.type = 'button';
                     editButton.className = 'emby-button raised radio-station-edit';
+                    editButton.style.marginLeft = 'auto';
                     editButton.setAttribute('aria-label', 'Edit ' + (getValue(station, 'Name', 'name') || 'station'));
                     editButton.setAttribute('title', 'Edit station');
                     makePencilIcon(editButton);
                     editButton.addEventListener('click', function () {
                         if (row.querySelector('.radio-station-edit-form')) return;
+                        var editScrollSnapshot = captureRadioMetaScrollPosition();
                         var currentName = String(getValue(station, 'Name', 'name') || '');
                         var currentUrl = String(getValue(station, 'StreamUrl', 'streamUrl') || '');
                         var currentArtworkPath = String(getValue(station, 'ArtworkPath', 'artworkPath') || '');
@@ -403,22 +551,105 @@ define([], function () {
                         var saveButton = document.createElement('button');
                         saveButton.type = 'button'; saveButton.className = 'emby-button raised button-submit'; saveButton.textContent = 'Save changes';
                         var cancelButton = document.createElement('button');
-                        cancelButton.type = 'button'; cancelButton.className = 'emby-button'; cancelButton.textContent = 'Cancel';
+                        cancelButton.type = 'button'; cancelButton.className = 'emby-button raised'; cancelButton.textContent = 'Cancel';
                         var deleteButton = document.createElement('button');
-                        deleteButton.type = 'button'; deleteButton.className = 'emby-button'; deleteButton.textContent = 'Delete station';
+                        deleteButton.type = 'button'; deleteButton.className = 'emby-button raised button-delete'; deleteButton.textContent = 'Delete station';
+                        deleteButton.title = 'Remove this station from the Radio Folder while keeping its saved metadata rules and corrections.';
                         actions.appendChild(saveButton); actions.appendChild(cancelButton); actions.appendChild(deleteButton);
+                        var proxyLabel = document.createElement('label');
+                        proxyLabel.style.cssText = 'display:inline-flex;align-items:center;gap:4px;margin-left:8px;align-self:center;cursor:pointer;';
+                        var proxyCheckbox = document.createElement('input');
+                        proxyCheckbox.type = 'checkbox';
+                        proxyCheckbox.checked = !!getValue(station, 'UseProxy', 'useProxy');
+                        proxyCheckbox.setAttribute('aria-label', 'Use proxy for ' + (currentName || 'station'));
+                        var proxyText = document.createElement('span');
+                        proxyText.textContent = 'proxy';
+                        proxyLabel.appendChild(proxyCheckbox); proxyLabel.appendChild(proxyText);
+                        actions.appendChild(proxyLabel);
+
+                        // Proxy-enabled stations must be explicitly unproxied before editing.
+                        // Keep this lock in the source section so it survives dashboard bundle rebuilds.
+                        var normalEditHelp = 'Saving updates the .strm file. A supplied JPG/PNG logo URL downloads a replacement; leaving it blank keeps the current logo and renames it with the station if needed.';
+                        function updateProxyEditLock(isProxyEnabled) {
+                            [nameInput, urlInput, artworkInput, saveButton].forEach(function (control) {
+                                control.disabled = !!isProxyEnabled;
+                                control.style.opacity = isProxyEnabled ? '0.52' : '';
+                                control.style.cursor = isProxyEnabled ? 'not-allowed' : '';
+                            });
+                            [nameLabel, urlLabel, artworkLabel].forEach(function (label) {
+                                label.style.opacity = isProxyEnabled ? '0.55' : '';
+                                label.style.cursor = isProxyEnabled ? 'not-allowed' : '';
+                            });
+                            if (isProxyEnabled) {
+                                help.textContent = 'Editing is disabled while proxy is enabled. Uncheck “proxy” below to disable it. The station list will refresh; reopen Edit to change the station name, stream URL, or logo.';
+                                help.style.cssText = 'padding:8px;border-left:3px solid var(--theme-primary-color, #888);background:var(--cardBackgroundColor, rgba(128,128,128,0.08));';
+                                proxyLabel.title = 'Proxy is enabled. Uncheck to restore direct playback and then reopen Edit to change station details.';
+                            } else {
+                                help.textContent = normalEditHelp;
+                                help.style.cssText = '';
+                                proxyLabel.title = 'Enable or disable proxy playback for this station.';
+                            }
+                        }
+                        updateProxyEditLock(proxyCheckbox.checked);
+
+                        proxyCheckbox.addEventListener('change', function () {
+                            var actionScrollSnapshot = captureRadioMetaScrollPosition();
+                            var desired = proxyCheckbox.checked;
+                            // Keep fields locked while the request is in flight. On success the
+                            // station list is rescanned; on failure restore the prior lock state.
+                            updateProxyEditLock(true);
+                            proxyCheckbox.disabled = true;
+                            status.textContent = (desired ? 'Enabling proxy for ' : 'Disabling proxy for ') + currentName + '...';
+                            ApiClient.ajax({
+                                type: 'POST',
+                                url: ApiClient.getUrl('RadioMeta/Stations/Proxy'),
+                                data: JSON.stringify({ FilePath: filePath, UseProxy: desired }),
+                                contentType: 'application/json',
+                                dataType: 'json'
+                            }).then(function (data) { if (data && typeof data.json === 'function') return data.json(); return data; })
+                              .then(function (data) {
+                                  if (typeof data === 'string') { try { data = JSON.parse(data); } catch (ignore) {} }
+                                  if (data && (data.Success === true || data.success === true)) {
+                                      status.textContent = 'Proxy ' + (desired ? 'enabled' : 'disabled') + ' for ' + currentName + '. Refreshing Emby library...';
+                                      requestTargetedLibraryRefresh(data).then(function (scanResult) {
+                                          status.textContent = 'Proxy ' + (desired ? 'enabled' : 'disabled') + ' for ' + currentName + '. ' + scanResult.message + ' Refreshing station list...';
+                                          scanStationFolder(scanResult.message, data);
+                                          restoreRadioMetaScrollPosition(actionScrollSnapshot);
+                                      });
+                                  } else {
+                                      recordStationOperationFailure(desired ? 'Enable proxy' : 'Disable proxy', currentName, 'server-rejected');
+                                      proxyCheckbox.checked = !desired;
+                                      proxyCheckbox.disabled = false;
+                                      updateProxyEditLock(proxyCheckbox.checked);
+                                      window.alert((data && (data.Error || data.error)) || 'The server did not confirm the proxy change.');
+                                  restoreRadioMetaScrollPosition(actionScrollSnapshot);
+                                  }
+                              }).catch(function (error) {
+                                  recordStationOperationFailure(desired ? 'Enable proxy' : 'Disable proxy', currentName, 'request-failed');
+                                  proxyCheckbox.checked = !desired;
+                                  proxyCheckbox.disabled = false;
+                                  updateProxyEditLock(proxyCheckbox.checked);
+                                  window.alert('Could not change proxy setting: ' + (error && error.message ? error.message : String(error)));
+                                  restoreRadioMetaScrollPosition(actionScrollSnapshot);
+                              });
+                        });
                         editForm.appendChild(nameLabel); editForm.appendChild(urlLabel); editForm.appendChild(artworkLabel); editForm.appendChild(help); editForm.appendChild(actions);
                         content.appendChild(editForm);
                         editButton.disabled = true;
-                        nameInput.focus();
+                        if (proxyCheckbox.checked) focusRadioMetaWithoutScrolling(proxyCheckbox, false);
+                        else focusRadioMetaWithoutScrolling(nameInput, false);
+                        restoreRadioMetaScrollPosition(editScrollSnapshot);
                         cancelButton.addEventListener('click', function () {
+                            var cancelScrollSnapshot = captureRadioMetaScrollPosition();
                             editForm.remove(); editButton.disabled = false;
+                            restoreRadioMetaScrollPosition(cancelScrollSnapshot);
                         });
                         deleteButton.addEventListener('click', function () {
+                            var actionScrollSnapshot = captureRadioMetaScrollPosition();
                             var stationName = currentName || 'this station';
-                            if (!window.confirm('Delete ' + stationName + '.strm and its matching JPG/JPEG/PNG logo? This cannot be undone.')) return;
+                            if (!window.confirm('Disable ' + stationName + '? This removes its .strm file, matching station artwork, and proxy sidecar from the Radio Folder. Its saved station metadata rules and title corrections will be kept.')) return;
                             deleteButton.disabled = true; saveButton.disabled = true; cancelButton.disabled = true;
-                            status.textContent = 'Deleting ' + stationName + '...';
+                            status.textContent = 'Disabling ' + stationName + '...';
                             ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('RadioMeta/Stations/Delete'), data: JSON.stringify({ FilePath: filePath }), contentType: 'application/json', dataType: 'json' })
                                 .then(function (data) { if (data && typeof data.json === 'function') return data.json(); return data; })
                                 .then(function (data) {
@@ -427,17 +658,25 @@ define([], function () {
                                         var deleteWarning = String(getValue(data, 'Warning', 'warning') || '');
                                         requestTargetedLibraryRefresh(data).then(function (scanResult) {
                                             var notes = [deleteWarning, scanResult.message].filter(Boolean).join(' ');
-                                            status.textContent = 'Deleted station and matching logo. ' + notes + ' Refreshing station list...';
-                                            scanStationFolder(notes);
+                                            status.textContent = 'Disabled ' + stationName + '. Removed its .strm file and matching station files; saved station configuration was kept. ' + notes + ' Refreshing station list...';
+                                            scanStationFolder(notes, data);
+                                            restoreRadioMetaScrollPosition(actionScrollSnapshot);
                                         });
                                     } else {
-                                        window.alert((data && (data.Error || data.error)) || 'The server did not confirm deletion.');
-                                        deleteButton.disabled = false; saveButton.disabled = false; cancelButton.disabled = false;
+                                        recordStationOperationFailure('Delete station', stationName, 'server-rejected');
+                                        window.alert((data && (data.Error || data.error)) || 'The server did not confirm that the station was disabled.');
+                                        deleteButton.disabled = false; updateProxyEditLock(proxyCheckbox.checked); cancelButton.disabled = false;
+                                        restoreRadioMetaScrollPosition(actionScrollSnapshot);
                                     }
                                 })
-                                .catch(function (error) { window.alert('Station delete failed: ' + (error && error.message ? error.message : String(error))); deleteButton.disabled = false; saveButton.disabled = false; cancelButton.disabled = false; });
+                                .catch(function (error) { recordStationOperationFailure('Delete station', stationName, 'request-failed'); window.alert('Station delete failed: ' + (error && error.message ? error.message : String(error))); deleteButton.disabled = false; updateProxyEditLock(proxyCheckbox.checked); cancelButton.disabled = false; restoreRadioMetaScrollPosition(actionScrollSnapshot); });
                         });
                         saveButton.addEventListener('click', function () {
+                            var actionScrollSnapshot = captureRadioMetaScrollPosition();
+                            if (proxyCheckbox.checked) {
+                                window.alert('Disable proxy for this station first. The station list will refresh; reopen Edit to make changes.');
+                                return;
+                            }
                             var editedName = nameInput.value.trim();
                             var editedUrl = urlInput.value.trim();
                             if (!editedName) { nameInput.focus(); window.alert('Station name cannot be blank.'); return; }
@@ -456,15 +695,24 @@ define([], function () {
                             }).then(function (data) {
                                 if (typeof data === 'string') { try { data = JSON.parse(data); } catch (ignore) {} }
                                 if (data && (data.Success === true || data.success === true)) {
-                                    status.textContent = 'Updated station "' + (data.Name || data.name || editedName) + '". Refreshing station list...';
-                                    scanStationFolder();
+                                    var updatedStationName = data.Name || data.name || editedName;
+                                    status.textContent = 'Updated station "' + updatedStationName + '". Refreshing Emby library...';
+                                    requestTargetedLibraryRefresh(data).then(function (scanResult) {
+                                        status.textContent = 'Updated station "' + updatedStationName + '". ' + scanResult.message + ' Refreshing station list...';
+                                        scanStationFolder(scanResult.message, data);
+                                        restoreRadioMetaScrollPosition(actionScrollSnapshot);
+                                    });
                                 } else {
+                                    recordStationOperationFailure('Edit/rename station', editedName || currentName, 'server-rejected');
                                     window.alert((data && (data.Error || data.error)) || 'The server did not confirm the station update.');
-                                    saveButton.disabled = false; cancelButton.disabled = false;
+                                    updateProxyEditLock(proxyCheckbox.checked); cancelButton.disabled = false;
+                                    restoreRadioMetaScrollPosition(actionScrollSnapshot);
                                 }
                             }).catch(function (error) {
+                                recordStationOperationFailure('Edit/rename station', editedName || currentName, 'request-failed');
                                 window.alert('Station edit failed: ' + (error && error.message ? error.message : String(error)));
-                                saveButton.disabled = false; cancelButton.disabled = false;
+                                updateProxyEditLock(proxyCheckbox.checked); cancelButton.disabled = false;
+                                restoreRadioMetaScrollPosition(actionScrollSnapshot);
                             });
                         });
                     });
@@ -474,12 +722,15 @@ define([], function () {
                 status.textContent = withCompletionNote('Scan complete: ' + stations.length + ' unique .strm file(s) listed; ' +
                     scannedFiles + ' station file(s) examined in ' + folder +
                     '. Configured path: ' + (configuredFolder || '(not returned)') + '; directories examined: ' + directoriesExamined + '; directory errors: ' + directoryErrors + '. Existing files were not modified.');
+                reportStationOperationResult(stationOperationData, { stationListRefreshStatus: 'completed' });
             }).catch(function (error) {
                 status.textContent = withCompletionNote('Station scan failed: ' +
                     (error && error.message ? error.message : String(error))); 
                 console.error('Radio Meta station scan:', error);
+                reportStationOperationResult(stationOperationData, { stationListRefreshStatus: 'failed' });
             }).finally(function () {
                 stationScanInProgress = false;
+                restoreRadioMetaScrollPosition(scrollSnapshot);
             });
         }
 
@@ -738,6 +989,7 @@ define([], function () {
 
         function updateHistoryEditPreview(editorRow) {
             if (!editorRow) return;
+            var artistInput = editorRow.querySelector('[data-history-edit-artist]');
             var correctedInput = editorRow.querySelector('[data-history-edit-corrected]');
             var scopeInput = editorRow.querySelector('input[name="radioHistoryEditScope"]:checked');
             var preserveInput = editorRow.querySelector('[data-history-edit-preserve]');
@@ -747,6 +999,8 @@ define([], function () {
 
             var original = editorRow.getAttribute('data-original-title') || '';
             var current = editorRow.getAttribute('data-current-title') || original;
+            var currentArtist = editorRow.getAttribute('data-current-artist') || '';
+            var correctedArtist = artistInput ? artistInput.value.trim() : currentArtist;
             var corrected = correctedInput.value.trim();
             var preserveLabels = preserveInput ? preserveInput.value.trim() : '';
             if (preserveInput) {
@@ -758,28 +1012,38 @@ define([], function () {
                 return;
             }
             if (scopeInput.value === 'Station') {
+                if (correctedArtist !== currentArtist) {
+                    preview.textContent = 'Artist changes apply to This song only. Switch the correction scope to This song only to save an artist correction.';
+                    saveButton.disabled = true;
+                    return;
+                }
                 var inferred = inferStationCleanup(original, corrected, preserveLabels);
                 preview.textContent = inferred.ok
                     ? 'Station rule preview: ' + inferred.description + (preserveLabels ? ' Labels to preserve: ' + preserveLabels + '.' : '')
                     : inferred.message;
                 saveButton.disabled = historyActionInProgress || !inferred.ok;
             } else {
-                preview.textContent = corrected === current
-                    ? 'No title change has been made yet.'
-                    : 'Save this exact correction for this station and incoming title; future exact matches will use it.';
-                saveButton.disabled = historyActionInProgress || corrected === current;
+                var artistChanged = correctedArtist !== currentArtist;
+                var titleChanged = corrected !== current;
+                preview.textContent = !artistChanged && !titleChanged
+                    ? 'No artist or title change has been made yet.'
+                    : 'Save this exact artist/title correction for this station and incoming title; future exact matches will use it.';
+                saveButton.disabled = historyActionInProgress || (!artistChanged && !titleChanged);
             }
         }
 
         function closeHistoryEditor(id) {
+            var scrollSnapshot = captureRadioMetaScrollPosition();
             var targetId = id || activeHistoryEditId;
             var editorRow = findHistoryEditorRow(targetId);
             if (editorRow && editorRow.parentNode) editorRow.parentNode.removeChild(editorRow);
             if (!id || activeHistoryEditId === id) activeHistoryEditId = '';
+            restoreRadioMetaScrollPosition(scrollSnapshot);
         }
 
         function openHistoryEditor(id) {
             if (historyActionInProgress || !id) return;
+            var scrollSnapshot = captureRadioMetaScrollPosition();
             if (activeHistoryEditId === id) {
                 closeHistoryEditor(id);
                 return;
@@ -793,6 +1057,7 @@ define([], function () {
             if (!item || !row || !row.parentNode) return;
 
             var currentTitle = String(getValue(item, 'SongTitle', 'songTitle') || '');
+            var currentArtist = String(getValue(item, 'Artist', 'artist') || '');
             var originalTitle = String(getValue(item, 'OriginalSongTitle', 'originalSongTitle') || currentTitle);
             if (!originalTitle) originalTitle = currentTitle;
             var editorRow = document.createElement('tr');
@@ -800,6 +1065,7 @@ define([], function () {
             editorRow.setAttribute('data-history-editor-for', id);
             editorRow.setAttribute('data-original-title', originalTitle);
             editorRow.setAttribute('data-current-title', currentTitle);
+            editorRow.setAttribute('data-current-artist', currentArtist);
             var cell = document.createElement('td');
             cell.colSpan = 6;
             var editor = document.createElement('div');
@@ -807,19 +1073,28 @@ define([], function () {
 
             var fields = document.createElement('div');
             fields.className = 'radio-history-edit-fields';
-            var originalField = document.createElement('div');
-            originalField.className = 'radio-history-edit-field';
-            addText(originalField, '', 'Original incoming title', 'label');
-            var originalValue = document.createElement('div');
-            originalValue.className = 'radio-history-edit-original';
-            originalValue.textContent = originalTitle;
-            originalField.appendChild(originalValue);
-            fields.appendChild(originalField);
+            var artistField = document.createElement('div');
+            artistField.className = 'radio-history-edit-field';
+            var artistFound = addText(artistField, 'radio-history-edit-found-value', 'Artist found: ' + (currentArtist || '(empty)'), 'div');
+            artistFound.style.cssText = 'font-size:0.85em;opacity:0.75;overflow-wrap:anywhere;margin-bottom:2px;';
+            var artistLabel = document.createElement('label');
+            artistLabel.textContent = 'Corrected artist';
+            var artistInput = document.createElement('input');
+            artistInput.type = 'text';
+            artistInput.className = 'emby-input';
+            artistInput.maxLength = 300;
+            artistInput.value = currentArtist;
+            artistInput.setAttribute('data-history-edit-artist', 'true');
+            artistLabel.appendChild(artistInput);
+            artistField.appendChild(artistLabel);
+            fields.appendChild(artistField);
 
             var correctedField = document.createElement('div');
             correctedField.className = 'radio-history-edit-field';
+            var titleFound = addText(correctedField, 'radio-history-edit-found-value', 'Title found: ' + originalTitle, 'div');
+            titleFound.style.cssText = 'font-size:0.85em;opacity:0.75;overflow-wrap:anywhere;margin-bottom:2px;';
             var correctedLabel = document.createElement('label');
-            correctedLabel.textContent = 'Title shown in history';
+            correctedLabel.textContent = 'Corrected song title';
             var correctedInput = document.createElement('input');
             correctedInput.type = 'text';
             correctedInput.className = 'emby-input';
@@ -877,7 +1152,7 @@ define([], function () {
             buttons.className = 'radio-history-edit-actions';
             var cancel = document.createElement('button');
             cancel.type = 'button';
-            cancel.className = 'emby-button radio-history-edit-cancel';
+            cancel.className = 'emby-button raised radio-history-edit-cancel';
             cancel.setAttribute('data-history-edit-cancel-id', id);
             cancel.textContent = 'Cancel';
             var save = document.createElement('button');
@@ -892,32 +1167,47 @@ define([], function () {
             editorRow.appendChild(cell);
             row.parentNode.insertBefore(editorRow, row.nextSibling);
             activeHistoryEditId = String(id);
+            artistInput.addEventListener('input', function () { updateHistoryEditPreview(editorRow); });
             correctedInput.addEventListener('input', function () { updateHistoryEditPreview(editorRow); });
             preserveInput.addEventListener('input', function () { updateHistoryEditPreview(editorRow); });
             updateHistoryEditPreview(editorRow);
-            correctedInput.focus();
-            correctedInput.select();
+            focusRadioMetaWithoutScrolling(correctedInput, true);
+            restoreRadioMetaScrollPosition(scrollSnapshot);
         }
 
         function saveHistoryTitleCorrection(id) {
             if (historyActionInProgress || !id) return;
+            var scrollSnapshot = captureRadioMetaScrollPosition();
             var editorRow = findHistoryEditorRow(id);
             if (!editorRow) return;
+            var artistInput = editorRow.querySelector('[data-history-edit-artist]');
             var correctedInput = editorRow.querySelector('[data-history-edit-corrected]');
             var scopeInput = editorRow.querySelector('input[name="radioHistoryEditScope"]:checked');
             var preserveInput = editorRow.querySelector('[data-history-edit-preserve]');
             var status = view.querySelector('#radioStatus');
+            var correctedArtist = artistInput ? artistInput.value.trim() : '';
             var correctedTitle = correctedInput ? correctedInput.value.trim() : '';
             var preserveLabels = preserveInput ? preserveInput.value.trim() : '';
             var scope = scopeInput ? scopeInput.value : 'SongOnly';
-            if (!correctedTitle) {
-                if (status) status.textContent = 'Enter a corrected title before saving.';
-                if (correctedInput) correctedInput.focus();
-                return;
-            }
             var item = findHistoryItem(id);
             if (!item) {
                 if (status) status.textContent = 'History entry not found. Refresh the history and try again.';
+                return;
+            }
+            var currentArtist = String(getValue(item, 'Artist', 'artist') || '');
+            if (!correctedArtist && currentArtist && scope !== 'Station') {
+                if (status) status.textContent = 'Enter the corrected artist (or restore the existing artist).';
+                if (artistInput) artistInput.focus();
+                return;
+            }
+            if (scope === 'Station' && correctedArtist !== currentArtist) {
+                if (status) status.textContent = 'Artist corrections apply to This song only. Switch the correction scope to This song only.';
+                if (artistInput) artistInput.focus();
+                return;
+            }
+            if (!correctedTitle) {
+                if (status) status.textContent = 'Enter a corrected title before saving.';
+                if (correctedInput) correctedInput.focus();
                 return;
             }
             if (scope === 'Station') {
@@ -937,24 +1227,26 @@ define([], function () {
             var cancelButton = editorRow.querySelector('.radio-history-edit-cancel');
             if (saveButton) saveButton.disabled = true;
             if (cancelButton) cancelButton.disabled = true;
-            if (status) status.textContent = 'Saving corrected title...';
+            if (status) status.textContent = 'Saving corrected artist and title...';
 
             ApiClient.ajax({
                 type: 'POST',
                 url: ApiClient.getUrl('RadioMeta/History/Edit'),
-                data: JSON.stringify({ Id: id, CorrectedTitle: correctedTitle, Scope: scope, PreserveLabels: preserveLabels }),
+                data: JSON.stringify({ Id: id, CorrectedArtist: scope === 'Station' ? '' : correctedArtist, CorrectedTitle: correctedTitle, Scope: scope, PreserveLabels: preserveLabels }),
                 contentType: 'application/json'
             }).then(function (data) {
                 var error = getValue(data, 'Error', 'error');
                 if (error) throw new Error(error);
 
                 item.SongTitle = correctedTitle;
-                var songCell = Array.from(view.querySelectorAll('tr[data-history-row-id]')).find(function (row) {
+                if (scope !== 'Station' && correctedArtist) item.Artist = correctedArtist;
+                var historyRow = Array.from(view.querySelectorAll('tr[data-history-row-id]')).find(function (row) {
                     return row.getAttribute('data-history-row-id') === String(id);
                 });
-                if (songCell && songCell.children[2]) songCell.children[2].textContent = correctedTitle;
+                if (historyRow && historyRow.children[2]) historyRow.children[2].textContent = correctedTitle;
+                if (historyRow && historyRow.children[3]) historyRow.children[3].textContent = item.Artist || '—';
                 closeHistoryEditor(String(id));
-                if (status) status.textContent = getValue(data, 'Message', 'message') || 'Song title correction saved.';
+                if (status) status.textContent = getValue(data, 'Message', 'message') || 'Artist/title correction saved.';
                 if (scope === 'Station') {
                     loadTitleCleanupRules();
                 } else {
@@ -962,8 +1254,8 @@ define([], function () {
                 }
             }).catch(function (error) {
                 var message = error && error.message ? error.message : String(error);
-                if (status) status.textContent = 'Unable to save title correction: ' + message;
-                console.error('Radio Meta history title correction:', error);
+                if (status) status.textContent = 'Unable to save artist/title correction: ' + message;
+                console.error('Radio Meta history artist/title correction:', error);
             }).finally(function () {
                 historyActionInProgress = false;
                 setHistoryButtonsDisabled(false);
@@ -971,6 +1263,7 @@ define([], function () {
                     var activeEditor = findHistoryEditorRow(activeHistoryEditId);
                     if (activeEditor) updateHistoryEditPreview(activeEditor);
                 }
+                restoreRadioMetaScrollPosition(scrollSnapshot);
             });
         }
 
@@ -981,6 +1274,7 @@ define([], function () {
         function getStationMode(rule) {
             var mode = String(getValue(rule, 'Mode', 'mode') || 'Automatic').trim().toLowerCase();
             if (mode === 'stationonly') return 'StationOnly';
+            if (mode === 'stationdelay') return 'StationDelay';
             if (mode === 'carplay') return 'Carplay';
             return 'Automatic';
         }
@@ -1024,13 +1318,19 @@ define([], function () {
                 addText(details, 'radio-station-mode-name', station, 'strong');
                 addText(details, 'radio-station-mode-scope', 'Station / Device: ' + station);
                 var modeDescription = mode === 'StationOnly'
-                    ? 'Station only — skips track metadata lookups.'
-                    : mode === 'Carplay'
-                        ? 'Carplay — clears old song metadata on station changes.'
-                        : 'Automatic — uses normal track metadata lookups.';
-                var delayDescription = delaySeconds === 0
-                    ? 'Metadata delay: off.'
-                    : 'Metadata delay: ' + delaySeconds + ' second(s). A changed candidate restarts the timer.';
+                    ? 'Disable metadata — no track metadata lookups are performed.'
+                    : mode === 'StationDelay'
+                        ? 'Station delay — shows the first valid current song immediately on entry, then delays later song/artist changes.'
+                        : mode === 'Carplay'
+                            ? 'Carplay — existing device behavior; clears old song metadata on station changes.'
+                            : 'Automatic — uses normal track metadata lookups.';
+                var delayDescription = mode === 'StationOnly'
+                    ? (delaySeconds > 0
+                        ? 'Configured delay is ignored because metadata lookups are disabled.'
+                        : 'Metadata lookups and delay are disabled.')
+                    : delaySeconds === 0
+                        ? 'Metadata delay: off.'
+                        : 'Metadata delay: ' + delaySeconds + ' second(s). A changed candidate restarts the timer.';
                 var legacyTargetDescription = targetDevice
                     ? ' Existing station rule is limited to ' + targetDevice + '.'
                     : '';
@@ -1114,14 +1414,18 @@ define([], function () {
                 stationModeRules = getValue(data, 'Rules', 'rules') || nextRules;
                 renderStationModeRules();
                 var savedMessage = successMessage || (mode === 'StationOnly'
-                    ? 'Station only saved for ' + station + '. Track metadata lookups are skipped.'
-                    : mode === 'Carplay'
-                        ? 'Carplay saved for ' + station + '. Normal metadata lookup is enabled; the selected delay controls when updated song metadata is published.'
-                        : 'Automatic saved for ' + station + '. Normal metadata lookup is enabled.');
+                    ? 'Metadata disabled for ' + station + '. Track metadata lookups are skipped.'
+                    : mode === 'StationDelay'
+                        ? 'Station delay saved for ' + station + '. The first valid current song is immediate; later changes use the configured delay.'
+                        : mode === 'Carplay'
+                            ? 'Carplay saved for ' + station + '. Existing Carplay transition behavior is unchanged; the selected delay controls updated song metadata.'
+                            : 'Automatic saved for ' + station + '. Normal metadata lookup is enabled.');
                 status.textContent = savedMessage +
-                    (delaySeconds > 0
-                        ? ' Metadata delay: ' + delaySeconds + ' second(s). The identifier is matched against station titles and Emby device names.'
-                        : ' Metadata delay is off.');
+                    (mode === 'StationOnly'
+                        ? ' The delay value is ignored while metadata lookup is disabled.'
+                        : delaySeconds > 0
+                            ? ' Metadata delay: ' + delaySeconds + ' second(s). The identifier is matched against station titles and Emby device names.'
+                            : ' Metadata delay is off.');
                 if (clearStationInput) {
                     var input = view.querySelector('#radioStationModeName');
                     var modeSelect = view.querySelector('#radioStationModeValue');
@@ -1157,7 +1461,7 @@ define([], function () {
             }
 
             var station = input.value.trim();
-            var mode = modeSelect.value === 'StationOnly' ? 'StationOnly' : (modeSelect.value === 'Carplay' ? 'Carplay' : 'Automatic');
+            var mode = modeSelect.value === 'StationOnly' ? 'StationOnly' : (modeSelect.value === 'StationDelay' ? 'StationDelay' : (modeSelect.value === 'Carplay' ? 'Carplay' : 'Automatic'));
             var delaySeconds = Math.max(0, Math.min(30, Number(delaySelect.value) || 0));
             var existingTargetDevice = stationModeRules.find(function (rule) {
                 return getModeStation(rule).toLowerCase() === station.toLowerCase();
@@ -1763,12 +2067,17 @@ define([], function () {
 
                     var stationFolderInput = view.querySelector('#radioStationFolder');
                     var ffprobePathInput = view.querySelector('#radioFfprobePath');
+                    var adaptiveRoutingInput = view.querySelector('#radioAdaptiveMetadataRouting');
                     if (stationFolderInput) {
                         stationFolderInput.value = String(getValue(data, 'StationFolder', 'stationFolder') || '');
                     }
                     updateStationFolderShortcut(getValue(data, 'StationFolder', 'stationFolder'));
                     if (ffprobePathInput) {
                         ffprobePathInput.value = String(getValue(data, 'FfprobePath', 'ffprobePath') || '');
+                    }
+                    if (adaptiveRoutingInput) {
+                        // Missing values from an older server default to on for the adaptive-routing release.
+                        adaptiveRoutingInput.checked = getValue(data, 'EnableAdaptiveMetadataRouting', 'enableAdaptiveMetadataRouting') !== false;
                     }
 
                     var automatic = !!getValue(data, 'AutomaticStationDetection', 'automaticStationDetection');
@@ -1815,7 +2124,8 @@ define([], function () {
             var saveButton = view.querySelector('#radioPathSettingsSave');
             var stationFolderInput = view.querySelector('#radioStationFolder');
             var ffprobePathInput = view.querySelector('#radioFfprobePath');
-            if (!status || !stationFolderInput || !ffprobePathInput || pathSettingsSaveInProgress) {
+            var adaptiveRoutingInput = view.querySelector('#radioAdaptiveMetadataRouting');
+            if (!status || !stationFolderInput || !ffprobePathInput || !adaptiveRoutingInput || pathSettingsSaveInProgress) {
                 return;
             }
 
@@ -1832,6 +2142,7 @@ define([], function () {
             }
             stationFolderInput.disabled = true;
             ffprobePathInput.disabled = true;
+            adaptiveRoutingInput.disabled = true;
             status.textContent = 'Saving path settings to the plugin XML...';
 
             ApiClient.ajax({
@@ -1839,7 +2150,8 @@ define([], function () {
                 url: ApiClient.getUrl('RadioMeta/PathSettings'),
                 data: JSON.stringify({
                     StationFolder: stationFolder,
-                    FfprobePath: ffprobePath
+                    FfprobePath: ffprobePath,
+                    EnableAdaptiveMetadataRouting: adaptiveRoutingInput.checked
                 }),
                 contentType: 'application/json'
             }).then(function (data) {
@@ -1851,9 +2163,10 @@ define([], function () {
 
                 stationFolderInput.value = String(getValue(data, 'StationFolder', 'stationFolder') || '');
                 ffprobePathInput.value = String(getValue(data, 'FfprobePath', 'ffprobePath') || '');
+                adaptiveRoutingInput.checked = getValue(data, 'EnableAdaptiveMetadataRouting', 'enableAdaptiveMetadataRouting') !== false;
                 updateStationFolderShortcut(stationFolderInput.value);
                 var message = String(getValue(data, 'Message', 'message') || 'Path settings saved to the plugin XML.');
-                status.textContent = message + ' Changes apply on the next playback progress update.';
+                status.textContent = message + ' Routing changes apply to the next metadata lookup; station-folder changes apply on the next playback progress update.';
             }).catch(function (error) {
                 status.textContent = 'Unable to save path settings: ' +
                     (error && error.message ? error.message : String(error));
@@ -1865,6 +2178,7 @@ define([], function () {
                 }
                 stationFolderInput.disabled = false;
                 ffprobePathInput.disabled = false;
+                adaptiveRoutingInput.disabled = false;
             });
         }
 
@@ -1959,19 +2273,21 @@ define([], function () {
             var nameInput = view.querySelector('#radioStationCreateName');
             var urlInput = view.querySelector('#radioStationCreateUrl');
             var artworkInput = view.querySelector('#radioStationCreateArtworkUrl');
+            var proxyInput = view.querySelector('#radioStationCreateUseProxy');
             var button = view.querySelector('#radioStationCreateButton');
             var status = view.querySelector('#radioStationCreateStatus');
             if (!nameInput || !urlInput || !artworkInput || !button || !status || button.disabled) return;
             var name = nameInput.value.trim();
             var streamUrl = urlInput.value.trim();
             var artworkUrl = artworkInput.value.trim();
+            var useProxy = !!(proxyInput && proxyInput.checked);
             if (!name || !streamUrl) { status.textContent = 'Enter both a station name and a stream URL.'; return; }
             button.disabled = true;
-            status.textContent = 'Creating station file...';
+            status.textContent = useProxy ? 'Creating proxy-enabled station file...' : 'Creating station file...';
             ApiClient.ajax({
                 type: 'POST',
                 url: ApiClient.getUrl('RadioMeta/Stations/Create'),
-                data: JSON.stringify({ Name: name, StreamUrl: streamUrl, ArtworkUrl: artworkUrl }),
+                data: JSON.stringify({ Name: name, StreamUrl: streamUrl, ArtworkUrl: artworkUrl, UseProxy: useProxy }),
                 contentType: 'application/json',
                 dataType: 'json'
             }).then(function (data) {
@@ -1983,7 +2299,7 @@ define([], function () {
                     var filePath = data.FilePath || data.filePath || '';
                     var artworkPath = data.ArtworkPath || data.artworkPath || '';
                     var logoWarning = String(getValue(data, 'Warning', 'warning') || '');
-                    var createdMessage = 'Created ' + (data.Name || data.name || name) + '.strm' +
+                    var createdMessage = 'Created ' + (data.Name || data.name || name) + '.strm' + (useProxy ? ' with proxy enabled' : '') +
                         (filePath ? ': ' + filePath : '') +
                         (artworkPath ? '. Logo saved: ' + artworkPath : (artworkUrl ? '. Logo URL was supplied.' : '. No logo supplied.')) +
                         (logoWarning ? ' ' + logoWarning : '');
@@ -1991,14 +2307,17 @@ define([], function () {
                     nameInput.value = '';
                     urlInput.value = '';
                     artworkInput.value = '';
+                    if (proxyInput) proxyInput.checked = false;
                     requestTargetedLibraryRefresh(data).then(function (scanResult) {
                         status.textContent = createdMessage + ' ' + scanResult.message;
-                        scanStationFolder(scanResult.message);
+                        scanStationFolder(scanResult.message, data);
                     });
                 } else {
+                    recordStationOperationFailure('Create station', name, 'server-rejected');
                     status.textContent = (data && (data.Error || data.error)) || 'The server did not confirm that the station file was created.';
                 }
             }).catch(function (error) {
+                recordStationOperationFailure('Create station', name, 'request-failed');
                 status.textContent = 'Station creation failed: ' + (error && error.message ? error.message : String(error));
                 console.error('Radio Meta station creation:', error);
             }).finally(function () { button.disabled = false; });
@@ -2044,6 +2363,13 @@ define([], function () {
 
         function diagnosticNormalize(value) {
             return diagnosticText(value).toLowerCase();
+        }
+
+        function diagnosticSanitizeError(value) {
+            var message = String(value && value.message ? value.message : value || 'Unknown error');
+            message = message.replace(/([?&](?:X-Emby-Token|api_key|access_token|token)=)[^&\s]+/gi, '$1[REDACTED]');
+            message = message.replace(/https?:\/\/[^\s'"<>]+/gi, '[URL]');
+            return message.slice(0, 220);
         }
 
         function diagnosticContainsTrack(text, track, includeStation) {
@@ -2169,6 +2495,81 @@ define([], function () {
             });
         }
 
+        function diagnosticPerformanceInsights(performance) {
+            if (!performance || typeof performance !== 'object') return null;
+            var networkCount = Number(diagnosticValue(performance, 'NetworkLookupCount', 'networkLookupCount') || 0);
+            var cacheHits = Number(diagnosticValue(performance, 'NetworkCacheHitCount', 'networkCacheHitCount') || 0);
+            var recentSamples = diagnosticValue(performance, 'RecentSamples', 'recentSamples') || [];
+            if (!Array.isArray(recentSamples)) recentSamples = [];
+            var recentNetwork = recentSamples.filter(function (sample) {
+                return String(diagnosticValue(sample, 'Operation', 'operation') || '').toLowerCase() === 'network lookup';
+            });
+            var recentUncached = recentNetwork.filter(function (sample) {
+                return diagnosticValue(sample, 'CacheHit', 'cacheHit') !== true;
+            });
+            function numericValue(sample, pascalName, camelName) {
+                var raw = diagnosticValue(sample, pascalName, camelName);
+                if (raw === '' || raw === null || raw === undefined) return null;
+                var value = Number(raw);
+                return Number.isFinite(value) ? value : null;
+            }
+            function mean(values) {
+                return values.length ? values.reduce(function (total, value) { return total + value; }, 0) / values.length : null;
+            }
+            function stageValues(samples, pascalName, camelName) {
+                return samples.map(function (sample) { return numericValue(sample, pascalName, camelName); })
+                    .filter(function (value) { return value !== null; });
+            }
+            var recentDurations = stageValues(recentUncached, 'DurationMs', 'durationMs').sort(function (a, b) { return a - b; });
+            var p95 = recentDurations.length ? recentDurations[Math.max(0, Math.ceil(recentDurations.length * 0.95) - 1)] : null;
+            var shoutcastSamples = recentUncached.filter(function (sample) {
+                var attempted = diagnosticValue(sample, 'ShoutcastAttempted', 'shoutcastAttempted');
+                var cancelled = diagnosticValue(sample, 'ShoutcastCancelled', 'shoutcastCancelled') === true;
+                return !cancelled && (attempted === true || attempted === undefined || attempted === null);
+            });
+            var shoutcast = stageValues(shoutcastSamples, 'ShoutcastDurationMs', 'shoutcastDurationMs');
+            var icy = recentUncached.filter(function (sample) {
+                return diagnosticValue(sample, 'IcyAttempted', 'icyAttempted') === true &&
+                    diagnosticValue(sample, 'IcyCancelled', 'icyCancelled') !== true;
+            });
+            var icyDurations = stageValues(icy, 'IcyDurationMs', 'icyDurationMs');
+            var resultCounts = {};
+            recentNetwork.forEach(function (sample) {
+                var cacheHit = diagnosticValue(sample, 'CacheHit', 'cacheHit') === true;
+                var source = cacheHit ? 'cache hit' : String(diagnosticValue(sample, 'ResultSource', 'resultSource') || diagnosticValue(sample, 'Outcome', 'outcome') || 'unknown');
+                resultCounts[source] = (resultCounts[source] || 0) + 1;
+            });
+            var resultSummary = Object.keys(resultCounts).sort().map(function (key) { return key + '=' + resultCounts[key]; }).join(', ');
+            return {
+                networkCount: networkCount,
+                cacheHits: cacheHits,
+                cacheHitRatePercent: networkCount > 0 ? (cacheHits / networkCount) * 100 : null,
+                recentNetworkCount: recentNetwork.length,
+                recentUncachedCount: recentUncached.length,
+                recentP95UncachedMs: p95,
+                recentAverageShoutcastMs: mean(shoutcast),
+                recentAverageIcyMs: mean(icyDurations),
+                recentIcyCount: icyDurations.length,
+                recentResultSummary: resultSummary || 'no recent network samples'
+            };
+        }
+
+        function diagnosticShoutcast404Summary(events) {
+            if (!Array.isArray(events)) return null;
+            var matches = events.filter(function (entry) {
+                var source = String(diagnosticValue(entry, 'Source', 'source') || '');
+                var detail = String(diagnosticValue(entry, 'Details', 'details') || '');
+                return /shoutcast/i.test(source) && /(?:HTTP\s+request\s+returned\s+status\s+404|status\s*[:=]?\s*404|HTTP\s+404)/i.test(detail);
+            });
+            if (!matches.length) return null;
+            var endpoints = [];
+            matches.forEach(function (entry) {
+                var source = String(diagnosticValue(entry, 'Source', 'source') || 'Shoutcast endpoint');
+                if (endpoints.indexOf(source) < 0) endpoints.push(source);
+            });
+            return matches.length + ' recent HTTP 404 event(s) from ' + endpoints.join(', ') + '. These are non-fatal when the station supplies usable ICY metadata; repeated endpoint probes may add latency.';
+        }
+
         function diagnosticAddCheck(checks, status, name, detail) {
             checks.push({ status: status, name: name, detail: String(detail || '') });
         }
@@ -2233,9 +2634,13 @@ define([], function () {
                     ? diagnosticValue(performance, 'RecentSamples', 'recentSamples') : [];
                 if (performance) {
                     performanceSection.style.display = '';
+                    var performanceInsights = diagnosticPerformanceInsights(performance);
                     var metricValues = [
                         ['Network lookups / uncached', (diagnosticValue(performance, 'NetworkLookupCount', 'networkLookupCount') || 0) + ' / ' + (diagnosticValue(performance, 'UncachedNetworkLookupCount', 'uncachedNetworkLookupCount') || 0)],
+                        ['Cache hit rate', performanceInsights && performanceInsights.cacheHitRatePercent !== null ? performanceInsights.cacheHitRatePercent.toFixed(1) + '% (' + performanceInsights.cacheHits + '/' + performanceInsights.networkCount + ')' : 'n/a'],
                         ['Avg / max uncached lookup', Number(diagnosticValue(performance, 'AverageNetworkLookupMs', 'averageNetworkLookupMs') || 0).toFixed(1) + ' / ' + Number(diagnosticValue(performance, 'MaxNetworkLookupMs', 'maxNetworkLookupMs') || 0).toFixed(1) + ' ms'],
+                        ['Recent p95 uncached lookup', performanceInsights && performanceInsights.recentP95UncachedMs !== null ? performanceInsights.recentP95UncachedMs.toFixed(1) + ' ms (up to 24 samples)' : 'n/a'],
+                        ['Recent avg Shoutcast / ICY', performanceInsights ? (performanceInsights.recentAverageShoutcastMs === null ? 'n/a' : performanceInsights.recentAverageShoutcastMs.toFixed(1) + ' ms') + ' / ' + (performanceInsights.recentAverageIcyMs === null ? 'n/a' : performanceInsights.recentAverageIcyMs.toFixed(1) + ' ms') : 'n/a'],
                         ['Direct ICY reads', diagnosticValue(performance, 'DirectIcyReadCount', 'directIcyReadCount') || 0],
                         ['Avg ICY time / intervals', Number(diagnosticValue(performance, 'AverageIcyDurationMs', 'averageIcyDurationMs') || 0).toFixed(1) + ' ms / ' + Number(diagnosticValue(performance, 'AverageIcyIntervalsAttempted', 'averageIcyIntervalsAttempted') || 0).toFixed(1)],
                         ['FFprobe launches', (diagnosticValue(performance, 'FfprobeStartedCount', 'ffprobeStartedCount') || 0) + ' of ' + (diagnosticValue(performance, 'FfprobeAttemptCount', 'ffprobeAttemptCount') || 0) + ' attempts'],
@@ -2275,12 +2680,22 @@ define([], function () {
                             details.className = 'radio-diagnostic-performance-details';
                             var detailParts = ['duration=' + Number(diagnosticValue(sample, 'DurationMs', 'durationMs') || 0).toFixed(1) + ' ms', 'outcome=' + outcome];
                             if (operation === 'Network lookup') {
-                                detailParts.push('Shoutcast=' + Number(diagnosticValue(sample, 'ShoutcastDurationMs', 'shoutcastDurationMs') || 0).toFixed(1) + ' ms');
+                                if (diagnosticValue(sample, 'ShoutcastAttempted', 'shoutcastAttempted') === false) {
+                                    detailParts.push('Shoutcast=not attempted');
+                                } else if (diagnosticValue(sample, 'ShoutcastCancelled', 'shoutcastCancelled') === true) {
+                                    detailParts.push('Shoutcast=cancelled early (partial time not averaged)');
+                                } else {
+                                    detailParts.push('Shoutcast=' + Number(diagnosticValue(sample, 'ShoutcastDurationMs', 'shoutcastDurationMs') || 0).toFixed(1) + ' ms');
+                                }
                                 if (diagnosticValue(sample, 'IcyAttempted', 'icyAttempted') === true) {
-                                    detailParts.push('ICY=' + Number(diagnosticValue(sample, 'IcyDurationMs', 'icyDurationMs') || 0).toFixed(1) + ' ms');
+                                    if (diagnosticValue(sample, 'IcyCancelled', 'icyCancelled') === true) {
+                                        detailParts.push('ICY=cancelled early (partial time not averaged)');
+                                    } else {
+                                        detailParts.push('ICY=' + Number(diagnosticValue(sample, 'IcyDurationMs', 'icyDurationMs') || 0).toFixed(1) + ' ms');
+                                    }
                                     detailParts.push('intervals=' + Number(diagnosticValue(sample, 'IcyIntervalsAttempted', 'icyIntervalsAttempted') || 0));
                                 } else {
-                                    detailParts.push('ICY=not needed');
+                                    detailParts.push('ICY=not attempted');
                                 }
                                 if (diagnosticValue(sample, 'CacheHit', 'cacheHit') === true) detailParts.push('cache hit');
                                 var resultSource = String(diagnosticValue(sample, 'ResultSource', 'resultSource') || '');
@@ -2364,14 +2779,22 @@ define([], function () {
             reportLines.push('');
             reportLines.push('PERFORMANCE MEASUREMENTS (rolling in-memory window; up to 120 most-recent samples; resets on restart):');
             if (performance) {
+                var reportPerformanceInsights = diagnosticPerformanceInsights(performance);
                 reportLines.push('  Retained samples: ' + (diagnosticValue(performance, 'RetainedSampleCount', 'retainedSampleCount') || 0));
                 reportLines.push('  Network lookups: ' + (diagnosticValue(performance, 'NetworkLookupCount', 'networkLookupCount') || 0) +
                     '; cache hits: ' + (diagnosticValue(performance, 'NetworkCacheHitCount', 'networkCacheHitCount') || 0) +
                     '; uncached lookups: ' + (diagnosticValue(performance, 'UncachedNetworkLookupCount', 'uncachedNetworkLookupCount') || 0) +
+                    '; cache hit rate: ' + (reportPerformanceInsights && reportPerformanceInsights.cacheHitRatePercent !== null ? reportPerformanceInsights.cacheHitRatePercent.toFixed(1) + '%' : 'n/a') +
                     '; average/max uncached: ' + Number(diagnosticValue(performance, 'AverageNetworkLookupMs', 'averageNetworkLookupMs') || 0).toFixed(1) + '/' + Number(diagnosticValue(performance, 'MaxNetworkLookupMs', 'maxNetworkLookupMs') || 0).toFixed(1) + ' ms');
+                if (reportPerformanceInsights) {
+                    reportLines.push('  Recent stage timing (up to 24 recent network samples; uncached only; excludes cancelled partial requests): Shoutcast average=' + (reportPerformanceInsights.recentAverageShoutcastMs === null ? 'n/a' : reportPerformanceInsights.recentAverageShoutcastMs.toFixed(1) + ' ms') +
+                        '; ICY average=' + (reportPerformanceInsights.recentAverageIcyMs === null ? 'n/a' : reportPerformanceInsights.recentAverageIcyMs.toFixed(1) + ' ms') +
+                        '; uncached lookup p95=' + (reportPerformanceInsights.recentP95UncachedMs === null ? 'n/a' : reportPerformanceInsights.recentP95UncachedMs.toFixed(1) + ' ms') +
+                        '; recent result sources: ' + reportPerformanceInsights.recentResultSummary);
+                }
                 reportLines.push('  Direct ICY reads: ' + (diagnosticValue(performance, 'DirectIcyReadCount', 'directIcyReadCount') || 0) +
                     '; average duration: ' + Number(diagnosticValue(performance, 'AverageIcyDurationMs', 'averageIcyDurationMs') || 0).toFixed(1) + ' ms' +
-                    '; average intervals attempted: ' + Number(diagnosticValue(performance, 'AverageIcyIntervalsAttempted', 'averageIcyIntervalsAttempted') || 0).toFixed(1));
+                    '; average intervals attempted: ' + Number(diagnosticValue(performance, 'AverageIcyIntervalsAttempted', 'averageIcyIntervalsAttempted') || 0).toFixed(1) + '; cancelled partial reads excluded from timing averages');
                 reportLines.push('  FFprobe attempts/process launches/non-success outcomes: ' + (diagnosticValue(performance, 'FfprobeAttemptCount', 'ffprobeAttemptCount') || 0) + '/' +
                     (diagnosticValue(performance, 'FfprobeStartedCount', 'ffprobeStartedCount') || 0) + '/' + (diagnosticValue(performance, 'FfprobeNonSuccessCount', 'ffprobeNonSuccessCount') || 0) +
                     '; average/max launched-process time: ' + Number(diagnosticValue(performance, 'AverageFfprobeDurationMs', 'averageFfprobeDurationMs') || 0).toFixed(1) + '/' + Number(diagnosticValue(performance, 'MaxFfprobeDurationMs', 'maxFfprobeDurationMs') || 0).toFixed(1) + ' ms');
@@ -2384,11 +2807,21 @@ define([], function () {
                     var outcome = String(diagnosticValue(sample, 'Outcome', 'outcome') || 'unknown');
                     var extras = [];
                     if (op === 'Network lookup') {
-                        extras.push('Shoutcast=' + Number(diagnosticValue(sample, 'ShoutcastDurationMs', 'shoutcastDurationMs') || 0).toFixed(1) + 'ms');
+                        if (diagnosticValue(sample, 'ShoutcastAttempted', 'shoutcastAttempted') === false) {
+                            extras.push('Shoutcast not attempted');
+                        } else if (diagnosticValue(sample, 'ShoutcastCancelled', 'shoutcastCancelled') === true) {
+                            extras.push('Shoutcast cancelled early; partial time excluded from averages');
+                        } else {
+                            extras.push('Shoutcast=' + Number(diagnosticValue(sample, 'ShoutcastDurationMs', 'shoutcastDurationMs') || 0).toFixed(1) + 'ms');
+                        }
                         if (diagnosticValue(sample, 'IcyAttempted', 'icyAttempted') === true) {
-                            extras.push('ICY=' + Number(diagnosticValue(sample, 'IcyDurationMs', 'icyDurationMs') || 0).toFixed(1) + 'ms');
+                            if (diagnosticValue(sample, 'IcyCancelled', 'icyCancelled') === true) {
+                                extras.push('ICY cancelled early; partial time excluded from averages');
+                            } else {
+                                extras.push('ICY=' + Number(diagnosticValue(sample, 'IcyDurationMs', 'icyDurationMs') || 0).toFixed(1) + 'ms');
+                            }
                             extras.push('intervals=' + Number(diagnosticValue(sample, 'IcyIntervalsAttempted', 'icyIntervalsAttempted') || 0));
-                        } else extras.push('ICY not needed');
+                        } else extras.push('ICY not attempted');
                         if (diagnosticValue(sample, 'CacheHit', 'cacheHit') === true) extras.push('cache hit');
                         var source = String(diagnosticValue(sample, 'ResultSource', 'resultSource') || '');
                         if (source) extras.push('result=' + source);
@@ -2450,6 +2883,15 @@ define([], function () {
 
             var checks = [];
             var startedAt = new Date();
+            var dashboardControllerInfo = window.__radioMetaDashboardControllerInfo_v1382;
+            diagnosticAddCheck(checks,
+                dashboardControllerInfo && dashboardControllerInfo.initialized === true ? 'PASS' : 'WARN',
+                'Dashboard controller bundle',
+                dashboardControllerInfo
+                    ? 'Version=' + String(dashboardControllerInfo.version || 'unknown') +
+                        '; source mode=' + String(dashboardControllerInfo.sourceMode || 'unknown') +
+                        '; sections=' + String((dashboardControllerInfo.sections || []).length) + '.'
+                    : 'Dashboard controller build marker is unavailable. The browser may have an older cached controller or an incomplete dashboard resource.');
             var helperKey = '__radioMetaIntegratedDisplay_v1323';
             var loaderKey = '__radioMetaDisplayLoaderState_v1366';
             var helperLoaded = window[helperKey] === true;
@@ -2492,7 +2934,12 @@ define([], function () {
                     return { ok: true, value: value };
                 }).catch(function (error) {
                     return { ok: false, error: error };
-                })
+                }),
+                diagnosticGetJson('RadioMeta/History', 9000).then(function (value) { return { ok: true, value: value }; }).catch(function (error) { return { ok: false, error: error }; }),
+                diagnosticGetJson('RadioMeta/TitleCleanup', 9000).then(function (value) { return { ok: true, value: value }; }).catch(function (error) { return { ok: false, error: error }; }),
+                diagnosticGetJson('RadioMeta/TitleCorrections', 9000).then(function (value) { return { ok: true, value: value }; }).catch(function (error) { return { ok: false, error: error }; }),
+                diagnosticGetJson('RadioMeta/StationModes', 9000).then(function (value) { return { ok: true, value: value }; }).catch(function (error) { return { ok: false, error: error }; }),
+                diagnosticGetJson('RadioMeta/IgnorePhrases', 9000).then(function (value) { return { ok: true, value: value }; }).catch(function (error) { return { ok: false, error: error }; })
             ]).then(function (responses) {
                 var healthResult = responses[0];
                 var tracksResult = responses[1];
@@ -2501,6 +2948,13 @@ define([], function () {
                 var serverInfoResult = responses[4];
                 var displayProbeResult = responses[5];
                 var displayProbe = displayProbeResult.ok ? displayProbeResult.value : null;
+                var separatedApiResults = [
+                    { label: 'History API', result: responses[6], field: 'Items' },
+                    { label: 'Title cleanup API', result: responses[7], field: 'Rules' },
+                    { label: 'Title corrections API', result: responses[8], field: 'Corrections' },
+                    { label: 'Station modes API', result: responses[9], field: 'Rules' },
+                    { label: 'Ignore phrases API', result: responses[10], field: 'Rules' }
+                ];
                 var serverInfo = serverInfoResult.ok ? (serverInfoResult.value || {}) : null;
                 var health = healthResult.ok ? (healthResult.value || {}) : null;
                 var currentTrackData = tracksResult.ok ? (tracksResult.value || {}) : null;
@@ -2508,6 +2962,18 @@ define([], function () {
                 var sessions = sessionsResult.ok ? sessionsResult.value : [];
                 var currentTracks = currentTrackData ? (diagnosticValue(currentTrackData, 'Items', 'items') || []) : [];
                 var activeRadioSessions = [];
+
+                separatedApiResults.forEach(function (entry) {
+                    var response = entry.result && entry.result.ok ? (entry.result.value || {}) : null;
+                    var apiError = response ? String(diagnosticValue(response, 'Error', 'error') || '').trim() : '';
+                    var collection = response ? diagnosticValue(response, entry.field, entry.field.charAt(0).toLowerCase() + entry.field.slice(1)) : null;
+                    var validResponse = !!response && !apiError && Array.isArray(collection);
+                    var failureDetail = entry.result && entry.result.error
+                        ? diagnosticSanitizeError(entry.result.error.message || entry.result.error)
+                        : apiError || 'The endpoint response did not contain the expected ' + entry.field + ' collection.';
+                    diagnosticAddCheck(checks, validResponse ? 'PASS' : 'FAIL', entry.label,
+                        validResponse ? 'Endpoint responded and returned its expected collection.' : 'Endpoint failed: ' + failureDetail);
+                });
 
                 sessions.forEach(function (session) {
                     var item = diagnosticValue(session, 'NowPlayingItem', 'nowPlayingItem');
@@ -2540,20 +3006,129 @@ define([], function () {
                         'The Radio Meta diagnostic endpoint did not respond. Build/install the current diagnostics update and restart Emby.');
                 } else {
                     var pluginVersion = String(diagnosticValue(health, 'PluginVersion', 'pluginVersion') || 'unknown');
-                    diagnosticAddCheck(checks, pluginVersion.indexOf('1.3.74') === 0 ? 'PASS' : 'WARN',
+                    var expectedPluginVersionLine = /^1\.(?:3|7)\./.test(pluginVersion);
+                    diagnosticAddCheck(checks, expectedPluginVersionLine ? 'PASS' : 'WARN',
                         'Plugin version',
-                        'Server reports Radio Meta ' + pluginVersion +
-                            (pluginVersion.indexOf('1.3.74') === 0 ? '.' : '; expected v1.3.74 for the Current Playback stream test and performance measurement panel.'));
+                        expectedPluginVersionLine
+                            ? 'Server reports Radio Meta ' + pluginVersion + '.'
+                            : 'Server reports Radio Meta ' + pluginVersion + '; these diagnostics recognize the 1.3.x mainline and legacy 1.7.x development reports.');
+                    var dashboardReportedVersion = dashboardControllerInfo ? String(dashboardControllerInfo.version || 'unknown') : 'unknown';
+                    // Assembly versions may include a fourth trailing zero, while the dashboard bundle
+                    // intentionally reports the equivalent three-part release version.
+                    // Normalize only that exact equivalent form so the diagnostic does not report a false mismatch.
+                    var normalizeVersionForAlignment = function (value) {
+                        var version = String(value || '').trim();
+                        return version.replace(/^(\d+\.\d+\.\d+)\.0$/, '$1');
+                    };
+                    var normalizedDashboardVersion = normalizeVersionForAlignment(dashboardReportedVersion);
+                    var normalizedPluginVersion = normalizeVersionForAlignment(pluginVersion);
+                    var dashboardVersionMatchesPlugin = normalizedDashboardVersion === normalizedPluginVersion;
+                    diagnosticAddCheck(checks,
+                        dashboardVersionMatchesPlugin ? 'PASS' : (dashboardReportedVersion === 'unknown' ? 'INFO' : 'WARN'),
+                        'Dashboard bundle version alignment',
+                        dashboardVersionMatchesPlugin
+                            ? 'Dashboard controller reports ' + dashboardReportedVersion + ' and server plugin reports ' + pluginVersion + '; these versions are equivalent.'
+                            : dashboardReportedVersion === 'unknown'
+                                ? 'Dashboard controller version could not be read. A hard refresh may be needed to load the current bundle.'
+                                : 'Dashboard controller reports ' + dashboardReportedVersion + ' while the server plugin reports ' + pluginVersion + '. This may indicate a stale browser-cached bundle or a mismatched source/DLL. Hard-refresh Emby Web and verify the installed DLL before reporting a bug.');
+                    var adaptiveRoutingValue = pathData ? diagnosticValue(pathData, 'EnableAdaptiveMetadataRouting', 'enableAdaptiveMetadataRouting') : undefined;
+                    if (adaptiveRoutingValue === true) {
+                        diagnosticAddCheck(checks, 'INFO', 'Adaptive metadata routing',
+                            'Adaptive routing is enabled and persisted per station. After four consecutive parallel race losses it tries the learned winner first. Successful parallel rechecks can grow from 10 to 20, 40, then 80 uncached lookups after two consecutive confirmations; a failed recheck returns the interval to 10. Endpoint backoff/block state is stored separately. Inspect recent Adaptive routing events for per-station decisions.');
+                    } else if (adaptiveRoutingValue === false) {
+                        diagnosticAddCheck(checks, 'INFO', 'Adaptive metadata routing',
+                            'Adaptive routing is disabled. Uncached lookups continue to run Shoutcast and direct ICY in parallel without learning a per-station preference.');
+                    } else {
+                        diagnosticAddCheck(checks, 'INFO', 'Adaptive metadata routing',
+                            'This plugin build does not report the adaptive-routing toggle; the setting is unavailable or this is the stable 1.3 line.');
+                    }
+
                     var readerLimit = Number(diagnosticValue(health, 'DirectIcyMaxIntervals', 'directIcyMaxIntervals') || 0);
-                    diagnosticAddCheck(checks, 'INFO', 'Direct ICY sampling limit',
+                    var liveSourceTimeout = Number(diagnosticValue(health, 'LiveMetadataSourceTimeoutSeconds', 'liveMetadataSourceTimeoutSeconds') || 0);
+                    var manualTestTimeout = Number(diagnosticValue(health, 'ManualStreamTestTimeoutSeconds', 'manualStreamTestTimeoutSeconds') || 0);
+                    var directIcyEnabled = diagnosticValue(health, 'DirectIcyFallbackEnabled', 'directIcyFallbackEnabled') === true;
+                    diagnosticAddCheck(checks,
+                        readerLimit > 0 && liveSourceTimeout > 0 && manualTestTimeout > 0 ? 'INFO' : 'WARN',
+                        'Live metadata capture guardrail',
+                        readerLimit > 0 && liveSourceTimeout > 0 && manualTestTimeout > 0
+                            ? 'Automatic playback metadata uses up to ' + liveSourceTimeout + ' seconds for the Shoutcast stage and a separate up-to-' + liveSourceTimeout + '-second ICY fallback when needed; direct ICY checks up to ' + readerLimit + ' metadata intervals and returns early when a usable title is found. Direct ICY fallback is ' + (directIcyEnabled ? 'enabled' : 'DISABLED') + '. The manual stream test has a separate overall limit of ' + manualTestTimeout + ' seconds. Shoutcast negative caching only skips recently unsupported Shoutcast endpoints; it does not reduce the ICY timeout or interval limit. Do not lower these live-reader limits solely for speed without testing delayed/intermittent stations, especially Affinity Radio.'
+                            : 'The live metadata timeout, ICY interval limit, or manual-test timeout was not reported. Do not reduce reader limits until the active values are confirmed and tested.');
+                    diagnosticAddCheck(checks, readerLimit > 0 ? 'INFO' : 'WARN', 'Direct ICY sampling limit',
                         readerLimit > 0
-                            ? 'The direct ICY reader examines at most ' + readerLimit + ' metadata intervals per attempt before the FFprobe fallback. The independent portable diagnostic can capture for much longer.'
+                            ? 'Direct ICY can inspect up to ' + readerLimit + ' metadata intervals per live attempt, returning as soon as a usable title is found. Keep this interval count paired with the live timeout when making performance changes.'
                             : 'The direct ICY sampling limit was not reported by this plugin build.');
+                    var currentStationMode = String(diagnosticValue(health, 'CurrentStationMetadataMode', 'currentStationMetadataMode') || 'Unknown');
+                    var currentStationLookupDisabled = diagnosticValue(health, 'CurrentStationMetadataLookupDisabled', 'currentStationMetadataLookupDisabled') === true;
+                    var currentStationModeMessage = String(diagnosticValue(health, 'CurrentStationMetadataModeMessage', 'currentStationMetadataModeMessage') || 'The active station metadata mode was not reported by this plugin build.');
+                    var currentStationNameForMode = String(diagnosticValue(health, 'CurrentlyPlayingStationName', 'currentlyPlayingStationName') || '');
+                    var currentStationModeRule = String(diagnosticValue(health, 'CurrentStationMetadataModeRule', 'currentStationMetadataModeRule') || '');
+                    var currentStationIdentityNames = diagnosticValue(health, 'CurrentStationMetadataIdentityNames', 'currentStationMetadataIdentityNames') || [currentStationNameForMode];
+                    if (!Array.isArray(currentStationIdentityNames)) currentStationIdentityNames = [currentStationNameForMode];
+                    currentStationIdentityNames = currentStationIdentityNames.concat(currentStationModeRule ? [currentStationModeRule] : []).filter(Boolean).map(diagnosticNormalize);
+                    var configuredStationOnlyRules = diagnosticValue(health, 'ConfiguredStationOnlyRuleNames', 'configuredStationOnlyRuleNames') || [];
+                    if (!Array.isArray(configuredStationOnlyRules)) configuredStationOnlyRules = [];
+                    function diagnosticStationRuleIdentity(value) {
+                        var identity = diagnosticNormalize(value).trim();
+                        // Mirror the server's narrow StationOnly fallback: ignore only a recognized
+                        // trailing bitrate label, such as " - 96k" or " (128 kbps)".
+                        return identity.replace(/\s*(?:[-‐‑‒–—−]\s*|\(\s*|\s+)\d{2,4}\s*(?:k(?:bps|bit\/s|bit)?|kb\/s|bps|bit\/s)(?:\s*\))?\s*$/i, '').trim();
+                    }
+                    var sameNamedStationOnlyRule = configuredStationOnlyRules.some(function (name) {
+                        var normalizedRule = diagnosticStationRuleIdentity(name);
+                        return currentStationIdentityNames.some(function (identity) {
+                            return identity === diagnosticNormalize(name) ||
+                                diagnosticStationRuleIdentity(identity) === normalizedRule;
+                        });
+                    });
+                    var modeCheckStatus = currentStationLookupDisabled && currentStationMode.toLowerCase() === 'stationonly'
+                        ? 'PASS'
+                        : (sameNamedStationOnlyRule ? 'WARN' : (currentStationMode === 'Unknown' ? 'WARN' : 'INFO'));
+                    var modeCheckMessage = currentStationLookupDisabled && currentStationMode.toLowerCase() === 'stationonly'
+                        ? currentStationModeMessage + ' The plugin should not initiate HTTP/ICY or FFprobe metadata lookups for this station.'
+                        : sameNamedStationOnlyRule
+                            ? 'A StationOnly rule named for the detected station exists, but the server did not resolve it as active. Metadata probing may still occur; check the saved station title and the rule shown below. ' + currentStationModeMessage
+                            : currentStationModeMessage;
+                    diagnosticAddCheck(checks, modeCheckStatus, 'Current station metadata policy', modeCheckMessage);
                     var recentReaderEvents = diagnosticValue(health, 'RecentEvents', 'recentEvents') || [];
-                    diagnosticAddCheck(checks, recentReaderEvents.length ? 'INFO' : 'WARN', 'Recent metadata reader trace',
+                    var serverStationDetectedForTrace = diagnosticValue(health, 'CurrentlyPlayingStationDetected', 'currentlyPlayingStationDetected') === true;
+                    var traceMissingStatus = (activeRadioSessions.length || serverStationDetectedForTrace) && !currentStationLookupDisabled ? 'WARN' : 'INFO';
+                    if (currentStationLookupDisabled && currentStationNameForMode) {
+                        var sameStationLookupEvents = recentReaderEvents.filter(function (event) {
+                            var eventStation = diagnosticNormalize(diagnosticValue(event, 'StationName', 'stationName'));
+                            var eventSource = String(diagnosticValue(event, 'Source', 'source') || '').toLowerCase();
+                            var eventStatus = String(diagnosticValue(event, 'Status', 'status') || '').toLowerCase();
+                            var eventTime = Date.parse(diagnosticValue(event, 'TimestampUtc', 'timestampUtc') || '');
+                            var skipTime = 0;
+                            for (var ei = 0; ei < recentReaderEvents.length; ei++) {
+                                var candidateEvent = recentReaderEvents[ei];
+                                if (String(diagnosticValue(candidateEvent, 'Source', 'source') || '').toLowerCase() === 'station metadata mode' &&
+                                    String(diagnosticValue(candidateEvent, 'Status', 'status') || '').toLowerCase() === 'skipped' &&
+                                    currentStationIdentityNames.indexOf(diagnosticNormalize(diagnosticValue(candidateEvent, 'StationName', 'stationName'))) >= 0) {
+                                    skipTime = Math.max(skipTime, Date.parse(diagnosticValue(candidateEvent, 'TimestampUtc', 'timestampUtc') || '') || 0);
+                                }
+                            }
+                            return currentStationIdentityNames.indexOf(eventStation) >= 0 &&
+                                eventSource !== 'station metadata mode' && eventTime > skipTime &&
+                                (eventStatus === 'detected' || eventStatus === 'parsed' || eventStatus === 'accepted' || eventStatus === 'error' || eventStatus === 'fallback' || eventStatus === 'empty');
+                        });
+                        if (sameStationLookupEvents.length) {
+                            diagnosticAddCheck(checks, 'WARN', 'StationOnly lookup enforcement',
+                                'The current station is configured as StationOnly, but newer metadata-reader events exist for this station after the most recent intentional-skip event. An already-running lookup or a separate metadata path may still be active; inspect timestamps in Recent metadata activity.');
+                        } else {
+                            diagnosticAddCheck(checks, 'PASS', 'StationOnly lookup enforcement',
+                                'No newer metadata-reader activity is recorded for the current StationOnly station. The configured no-lookup rule appears to be taking effect.');
+                        }
+                    }
+                    diagnosticAddCheck(checks, recentReaderEvents.length ? 'INFO' : traceMissingStatus, 'Recent metadata reader trace',
                         recentReaderEvents.length
                             ? recentReaderEvents.length + ' in-memory reader event(s) are available below, including detected/filtered titles and reader errors.'
-                            : 'No reader events are recorded yet. Start radio playback and rerun diagnostics after a few seconds.');
+                            : traceMissingStatus === 'WARN'
+                                ? 'No reader events are recorded although a radio session/station appears active. Rerun in a few seconds; if still empty, check plugin startup and reader logs.'
+                                : 'No reader events are recorded. This is normal before radio playback has started or after a fresh server restart.');
+                    var shoutcast404Summary = diagnosticShoutcast404Summary(recentReaderEvents);
+                    if (shoutcast404Summary) {
+                        diagnosticAddCheck(checks, 'INFO', 'Shoutcast endpoint fallback', shoutcast404Summary);
+                    }
                     var perf = diagnosticValue(health, 'Performance', 'performance') || null;
                     if (perf) {
                         var networkCount = Number(diagnosticValue(perf, 'NetworkLookupCount', 'networkLookupCount') || 0);
@@ -2561,8 +3136,15 @@ define([], function () {
                         var maxNetworkMs = Number(diagnosticValue(perf, 'MaxNetworkLookupMs', 'maxNetworkLookupMs') || 0);
                         var ffprobeStarted = Number(diagnosticValue(perf, 'FfprobeStartedCount', 'ffprobeStartedCount') || 0);
                         var ffprobeAverage = Number(diagnosticValue(perf, 'AverageFfprobeDurationMs', 'averageFfprobeDurationMs') || 0);
-                        diagnosticAddCheck(checks, 'INFO', 'Performance measurements',
-                            'Rolling in-memory window: ' + networkCount + ' network lookup(s), average uncached lookup ' + averageNetworkMs.toFixed(1) + ' ms, maximum ' + maxNetworkMs.toFixed(1) + ' ms; ' + ffprobeStarted + ' FFprobe process launch(es), average ' + ffprobeAverage.toFixed(1) + ' ms.');
+                        var performanceInsights = diagnosticPerformanceInsights(perf);
+                        var performanceDetail = 'Rolling in-memory window: ' + networkCount + ' network lookup(s), average/max uncached lookup ' + averageNetworkMs.toFixed(1) + '/' + maxNetworkMs.toFixed(1) + ' ms; ' + ffprobeStarted + ' FFprobe process launch(es), average ' + ffprobeAverage.toFixed(1) + ' ms.';
+                        if (performanceInsights) {
+                            performanceDetail += ' Cache hit rate=' + (performanceInsights.cacheHitRatePercent === null ? 'n/a' : performanceInsights.cacheHitRatePercent.toFixed(1) + '% (' + performanceInsights.cacheHits + '/' + performanceInsights.networkCount + ')') +
+                                '; recent uncached p95=' + (performanceInsights.recentP95UncachedMs === null ? 'n/a' : performanceInsights.recentP95UncachedMs.toFixed(1) + ' ms') +
+                                '; recent average Shoutcast/ICY=' + (performanceInsights.recentAverageShoutcastMs === null ? 'n/a' : performanceInsights.recentAverageShoutcastMs.toFixed(1) + ' ms') + '/' + (performanceInsights.recentAverageIcyMs === null ? 'n/a' : performanceInsights.recentAverageIcyMs.toFixed(1) + ' ms') +
+                                '; recent results=' + performanceInsights.recentResultSummary + '.';
+                        }
+                        diagnosticAddCheck(checks, 'INFO', 'Performance measurements', performanceDetail);
                     } else {
                         diagnosticAddCheck(checks, 'INFO', 'Performance measurements', 'No performance measurements are available in this server response.');
                     }
@@ -2580,6 +3162,66 @@ define([], function () {
                             ? 'The display JavaScript resource is present inside the plugin DLL.'
                             : 'The expected embedded JavaScript resource is missing from the loaded DLL.'
                     );
+                    diagnosticAddCheck(checks,
+                        diagnosticValue(health, 'DisplayLoaderResourceEmbedded', 'displayLoaderResourceEmbedded') === true ? 'PASS' : 'FAIL',
+                        'Embedded display loader',
+                        diagnosticValue(health, 'DisplayLoaderResourceEmbedded', 'displayLoaderResourceEmbedded') === true
+                            ? 'The DLL-hosted display loader resource is present.'
+                            : 'The DLL-hosted display loader resource is missing; verify the installed DLL and embedded resource declarations.');
+                    var displayRuntime = null;
+                    try {
+                        if (typeof window.__radioMetaDisplayDiagnostics_v1379 === 'function') displayRuntime = window.__radioMetaDisplayDiagnostics_v1379();
+                    } catch (_) {}
+                    if (!displayRuntime) {
+                        diagnosticAddCheck(checks, 'WARN', 'Display helper runtime diagnostics',
+                            'Runtime telemetry is unavailable. Confirm the embedded display helper is loaded and initialized.');
+                    } else {
+                        diagnosticAddCheck(checks, 'INFO', 'Display helper version',
+                            String(displayRuntime.displayHelperVersion || 'unknown'));
+                        var runtimeError = String(displayRuntime.lastPollError || '').trim();
+                        diagnosticAddCheck(checks, runtimeError ? 'WARN' : 'PASS', 'Display helper polling',
+                            'Last poll=' + String(displayRuntime.lastPollStatus || 'unknown') +
+                            '; duration=' + Number(displayRuntime.lastPollDurationMs || 0) + ' ms; sessions=' + Number(displayRuntime.lastSessionCount || 0) +
+                            '; selected session=' + (displayRuntime.lastHasPlaybackSession ? 'yes' : 'no') +
+                            '; item=' + (displayRuntime.lastHasNowPlayingItem ? 'yes' : 'no') +
+                            '; valid song/artist=' + (displayRuntime.lastTrackMetadataValid ? 'yes' : 'no') +
+                            (runtimeError ? '; last error=' + runtimeError : '.'));
+                        diagnosticAddCheck(checks,
+                            displayRuntime.radioPlaybackPending ? (displayRuntime.pendingExpired ? 'WARN' : 'INFO') : 'INFO',
+                            'Pending radio metadata',
+                            'Pending=' + (displayRuntime.radioPlaybackPending ? 'yes' : 'no') +
+                            '; elapsed=' + Math.round(Number(displayRuntime.radioPlaybackPendingElapsedMs || 0) / 1000) + ' s; timeout expired=' +
+                            (displayRuntime.pendingExpired ? 'yes' : 'no') + '; cached track=' + (displayRuntime.currentTrackCached ? 'yes' : 'no') + '.');
+                        diagnosticAddCheck(checks, 'INFO', 'Station-switch media-session reinforcement',
+                            'CurrentTracks fallback result=' + String(displayRuntime.lastCurrentTracksFallbackResult || 'never') +
+                            '; accepted fallbacks=' + Number(displayRuntime.currentTracksFallbackSuccessCount || 0) +
+                            '; consecutive fallback misses=' + Number(displayRuntime.currentTracksFallbackMisses || 0) +
+                            '; last fallback station=' + String(displayRuntime.lastCurrentTracksFallbackStation || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 80) +
+                            '; Media Session republish attempts succeeded=' + Number(displayRuntime.stationTransitionRepublishCount || 0) +
+                            '; last republish reason=' + String(displayRuntime.lastStationTransitionRepublishReason || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 60) + '.');
+                        diagnosticAddCheck(checks, 'INFO', 'Station-transition telemetry',
+                            'Station-cache entries=' + Number(displayRuntime.stationCacheEntryCount || 0) +
+                            '; station transition pending=' + (displayRuntime.stationTransitionPending ? 'yes' : 'no') +
+                            '; active track from recent cache=' + (displayRuntime.activeTrackFromRecentStationCache ? 'yes' : 'no') +
+                            '; stale tracks rejected=' + Number(displayRuntime.staleTransitionTrackRejections || 0) +
+                            '; .strm fallbacks shown=' + Number(displayRuntime.stationTransitionFallbackCount || 0) +
+                            '; last fallback station=' + String(displayRuntime.lastStationTransitionFallbackStation || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 80) +
+                            '; fallback source=' + String(displayRuntime.lastStationTransitionFallbackSource || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 40) +
+                            '; poll status=' + String(displayRuntime.lastPollStatus || 'unknown').replace(/[\r\n]/g, ' ').slice(0, 60) +
+                            '; immediate refreshes=' + Number(displayRuntime.immediateRefreshCount || 0) +
+                            '; queued=' + (displayRuntime.immediateRefreshQueued ? 'yes' : 'no') +
+                            '; last reason=' + String(displayRuntime.lastImmediateRefreshReason || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 100) + '.');
+                        var outputAdapterStatus = displayRuntime.outputAdapterStatus || {};
+                        var outputAdapterErrors = displayRuntime.outputAdapterErrors || {};
+                        Object.keys(outputAdapterStatus).forEach(function (adapterName) {
+                            var adapterState = String(outputAdapterStatus[adapterName] || 'unknown');
+                            var adapterError = String(outputAdapterErrors[adapterName] || '').trim();
+                            diagnosticAddCheck(checks,
+                                adapterState === 'ready' ? 'PASS' : 'WARN',
+                                'Display adapter: ' + adapterName,
+                                'State=' + adapterState + (adapterError ? '; last error=' + adapterError.slice(0, 200) : '.'));
+                        });
+                    }
                     diagnosticAddCheck(checks, 
                         diagnosticValue(health, 'HistoryStoreInitialized', 'historyStoreInitialized') === true ? 'PASS' : 'WARN',
                         'History service',
@@ -2606,21 +3248,27 @@ define([], function () {
                             ? 'FFprobe is available to the server.'
                             : 'FFprobe was not found. It is optional; metadata sources that do not need it can still work.'
                     );
-                    diagnosticAddCheck(checks, 
-                        diagnosticValue(health, 'CurrentlyPlayingStationDetected', 'currentlyPlayingStationDetected') === true ? 'PASS' : 'WARN',
+                    var serverStationDetected = diagnosticValue(health, 'CurrentlyPlayingStationDetected', 'currentlyPlayingStationDetected') === true;
+                    diagnosticAddCheck(checks,
+                        serverStationDetected ? 'PASS' : (activeRadioSessions.length ? 'WARN' : 'INFO'),
                         'Playback station detection',
-                        diagnosticValue(health, 'CurrentlyPlayingStationDetected', 'currentlyPlayingStationDetected') === true
+                        serverStationDetected
                             ? 'Radio Meta observed station "' + (diagnosticValue(health, 'CurrentlyPlayingStationName', 'currentlyPlayingStationName') || 'unnamed station') +
                                 '". Stream URL available: ' +
                                 (diagnosticValue(health, 'CurrentlyPlayingStreamUrlAvailable', 'currentlyPlayingStreamUrlAvailable') === true ? 'yes' : 'no') + '.'
-                            : 'No recent station capture. Start radio in an Emby client, wait several seconds, then run diagnostics again.'
-                    );
+                            : activeRadioSessions.length
+                                ? 'Radio Meta-bearing playback is visible, but the server has no recent station-capture record. Rerun after a few seconds; if it persists, inspect playback station detection.'
+                                : 'No recent station capture is recorded. This is informational when no Radio Meta station is playing at diagnostic time.');
                     var trackCount = Number(diagnosticValue(health, 'CurrentTrackCount', 'currentTrackCount') || 0);
-                    diagnosticAddCheck(checks, trackCount > 0 ? 'PASS' : 'WARN',
+                    diagnosticAddCheck(checks, trackCount > 0 ? 'PASS' : (currentStationLookupDisabled ? 'INFO' : (activeRadioSessions.length || serverStationDetected ? 'WARN' : 'INFO')),
                         'Accepted metadata cache',
                         trackCount > 0
                             ? trackCount + ' accepted current-track record(s) are cached.'
-                            : 'No accepted track metadata is cached right now. Start a station and wait for a song title and artist.');
+                            : currentStationLookupDisabled
+                                ? 'No accepted track metadata is cached, as expected: StationOnly is configured to skip metadata lookup for this station.'
+                                : (activeRadioSessions.length || serverStationDetected)
+                                    ? 'No accepted track metadata is cached although radio activity appears present. Wait a few seconds, then inspect the recent reader trace.'
+                                    : 'No accepted track metadata is cached. This is normal before Radio Meta playback begins.');
                 }
 
                 if (serverInfoResult.ok && serverInfo) {
@@ -2675,8 +3323,13 @@ define([], function () {
                         diagnosticAddCheck(checks, 'PASS', 'Radio Meta session metadata',
                             activeRadioSessions.length + ' active session(s) expose at least one RadioMeta ProviderId.');
                     } else {
-                        diagnosticAddCheck(checks, 'WARN', 'Radio Meta session metadata',
-                            'No active session exposes RadioMetaSong/Artist/Station right now. Start a radio station and rerun.');
+                        var serverSawStation = health && diagnosticValue(health, 'CurrentlyPlayingStationDetected', 'currentlyPlayingStationDetected') === true;
+                        diagnosticAddCheck(checks, currentStationLookupDisabled ? 'INFO' : (serverSawStation ? 'WARN' : 'INFO'), 'Radio Meta session metadata',
+                            currentStationLookupDisabled
+                                ? 'No visible session exposes RadioMetaSong/Artist/Station, as expected: StationOnly intentionally clears injected song metadata and skips lookups.'
+                                : serverSawStation
+                                    ? 'The server recently detected a radio station, but no visible Emby session currently exposes RadioMetaSong/Artist/Station. Rerun during active playback; if it persists, inspect the recent reader trace.'
+                                    : 'No active session currently exposes Radio Meta provider IDs. This is normal when no Radio Meta station is playing at diagnostic time.');
                     }
                 } else {
                     diagnosticAddCheck(checks, 'FAIL', 'Emby session API',
@@ -2696,13 +3349,19 @@ define([], function () {
                     );
                 } else if (localSession) {
                     var localItem = diagnosticValue(localSession, 'NowPlayingItem', 'nowPlayingItem');
-                    diagnosticAddCheck(checks, 'WARN', 'This browser session metadata',
-                        localItem
-                            ? 'This browser has a playing item, but its session has no Radio Meta provider IDs. The station may not have been accepted by the plugin yet.'
-                            : 'This browser has no active Now Playing item. Start a Radio Meta station in this browser to test its local player.');
+                    var localItemName = String(diagnosticValue(localItem, 'Name', 'name') || '');
+                    var capturedStationName = String(diagnosticValue(health, 'CurrentlyPlayingStationName', 'currentlyPlayingStationName') || '');
+                    var localItemMatchesCapturedStation = !!localItemName && !!capturedStationName &&
+                        diagnosticNormalize(localItemName) === diagnosticNormalize(capturedStationName);
+                    diagnosticAddCheck(checks, localItemMatchesCapturedStation ? 'WARN' : 'INFO', 'This browser session metadata',
+                        localItemMatchesCapturedStation
+                            ? 'This browser item matches the most recently detected station but has no Radio Meta provider IDs. If the song/artist should be available, inspect recent metadata reader events.'
+                            : localItem
+                                ? 'This browser is playing an item without Radio Meta provider IDs. That is normal for non-radio media; local player checks cannot confirm Radio Meta output unless this item is the active station.'
+                                : 'This browser has no active Now Playing item. This is informational unless you expected this exact browser to be playing the station.');
                 } else {
-                    diagnosticAddCheck(checks, 'WARN', 'This browser session metadata',
-                        'Could not match this browser to an Emby device session. Device IDs are not included in the report.');
+                    diagnosticAddCheck(checks, 'INFO', 'This browser session metadata',
+                        'No visible Emby session matched this browser. This is normal when diagnostics are run from a settings page or a different device than the one playing radio; local player and Media Session checks cannot be verified from this page. Device IDs are not included in the report.');
                 }
 
                 var cacheCompareEntry = localRadioSession || (activeRadioSessions.length === 1 ? activeRadioSessions[0] : null);
@@ -2751,8 +3410,10 @@ define([], function () {
                 var miniTarget = miniTargets.length ? miniTargets[0] : null;
                 var miniText = miniTarget ? diagnosticText(miniTarget.innerText || miniTarget.textContent || '') : '';
                 if (!miniTarget) {
-                    diagnosticAddCheck(checks, 'WARN', 'Mini-player display',
-                        'No visible mini-player text element exists in this page. Start playback in this browser and rerun diagnostics.');
+                    diagnosticAddCheck(checks, localRadioSession ? 'WARN' : 'INFO', 'Mini-player display',
+                        localRadioSession
+                            ? 'This browser session is playing Radio Meta, but no visible mini-player text element exists. Open or reveal the mini-player and rerun.'
+                            : 'No visible mini-player text element exists in this page. This is normal on a settings page or when playback is happening in another browser/device.');
                 } else if (expectedTrack && expectedTrack.song && expectedTrack.artist) {
                     var miniOk = diagnosticContainsTrack(miniText, expectedTrack, false);
                     diagnosticAddCheck(checks, miniOk ? 'PASS' : 'FAIL', 'Mini-player display',
@@ -2762,9 +3423,9 @@ define([], function () {
                                 expectedTrack.song + '", artist="' + expectedTrack.artist + '"; observed text="' +
                                 miniText.slice(0, 180) + '". Hard-refresh first; if this persists, report the mismatch.');
                 } else {
-                    diagnosticAddCheck(checks, 'WARN', 'Mini-player display',
+                    diagnosticAddCheck(checks, 'INFO', 'Mini-player display',
                         'Visible mini-player text="' + miniText.slice(0, 180) +
-                            '". Automatic comparison needs a Radio Meta session matched to this browser.');
+                            '". A matching local Radio Meta playback session was not identified, so this page cannot be used to judge whether that text is correct.');
                 }
 
                 var largeTargets = Array.prototype.slice.call(document.querySelectorAll(
@@ -2802,15 +3463,19 @@ define([], function () {
                 }
 
                 if (!window.navigator || !('mediaSession' in window.navigator) || !window.navigator.mediaSession) {
-                    diagnosticAddCheck(checks, 'WARN', 'Browser Media Session',
-                        'This browser does not expose navigator.mediaSession. Lock Screen/Control Center metadata cannot be inspected here.');
+                    diagnosticAddCheck(checks, localRadioSession ? 'WARN' : 'INFO', 'Browser Media Session',
+                        localRadioSession
+                            ? 'This active playback browser does not expose navigator.mediaSession, so Lock Screen/Control Center metadata cannot be inspected here.'
+                            : 'This page does not expose navigator.mediaSession. This is not evidence of a failure unless this exact browser is the active radio player.');
                 } else {
                     var mediaMetadata = window.navigator.mediaSession.metadata;
                     var mediaTitle = mediaMetadata ? String(mediaMetadata.title || '') : '';
                     var mediaArtist = mediaMetadata ? String(mediaMetadata.artist || '') : '';
                     if (!mediaMetadata) {
-                        diagnosticAddCheck(checks, 'WARN', 'Browser Media Session',
-                            'The browser has no Media Session metadata at the moment. Start radio playback in this browser and rerun.');
+                        diagnosticAddCheck(checks, localRadioSession ? 'WARN' : 'INFO', 'Browser Media Session',
+                            localRadioSession
+                                ? 'This active radio browser has no Media Session metadata at the moment. Rerun after a song title and artist are accepted.'
+                                : 'This page has no Media Session metadata. This is normal when playback is occurring on another device or browser.');
                     } else if (expectedTrack && expectedTrack.song && expectedTrack.artist) {
                         var mediaOk = diagnosticNormalize(mediaTitle) === diagnosticNormalize(expectedTrack.song) &&
                             diagnosticNormalize(mediaArtist) === diagnosticNormalize(expectedTrack.artist);
@@ -2825,6 +3490,203 @@ define([], function () {
                     }
                 }
 
+                var recentStationOperations = health
+                    ? diagnosticValue(health, 'RecentStationOperations', 'recentStationOperations')
+                    : null;
+                if (!Array.isArray(recentStationOperations)) {
+                    diagnosticAddCheck(checks, 'INFO', 'Station-file operation tracking',
+                        'This server response does not include station-file operation history. Build/install the diagnostics-enabled plugin version and retry.');
+                } else if (!recentStationOperations.length) {
+                    diagnosticAddCheck(checks, 'INFO', 'Station-file operation tracking',
+                        'No station create/edit/delete/proxy operation has been recorded since the plugin last started. The history is kept in memory and resets when Emby restarts.');
+                } else {
+                    var latestOperation = recentStationOperations[0] || {};
+                    var latestFileStatus = String(diagnosticValue(latestOperation, 'FileChangeStatus', 'fileChangeStatus') || 'unknown');
+                    var latestSidecarStatus = String(diagnosticValue(latestOperation, 'ProxySidecarStatus', 'proxySidecarStatus') || 'unknown');
+                    var latestLibraryStatus = String(diagnosticValue(latestOperation, 'LibraryRefreshStatus', 'libraryRefreshStatus') || 'unknown');
+                    var latestStationListStatus = String(diagnosticValue(latestOperation, 'StationListRefreshStatus', 'stationListRefreshStatus') || 'unknown');
+                    var operationFailure = /failed|unconfirmed|not confirmed|incomplete|missing or invalid|not requested: no matching library|zero stations/i.test(latestFileStatus + ' ' + latestSidecarStatus + ' ' + latestLibraryStatus + ' ' + latestStationListStatus);
+                    var operationPending = /pending|not verified|not attempted|not started|not run/i.test(latestLibraryStatus + ' ' + latestStationListStatus + ' ' + latestSidecarStatus);
+                    var operationCheckStatus = operationFailure ? 'WARN' : (operationPending ? 'INFO' : 'PASS');
+                    diagnosticAddCheck(checks, operationCheckStatus, 'Station-file operation tracking',
+                        'Most recent action: ' + String(diagnosticValue(latestOperation, 'Operation', 'operation') || 'unknown') +
+                        ' for ' + String(diagnosticValue(latestOperation, 'StationName', 'stationName') || 'unnamed station') +
+                        '; file change=' + latestFileStatus + '; proxy sidecar=' + latestSidecarStatus +
+                        '; library refresh=' + latestLibraryStatus + '; station-list refresh=' + latestStationListStatus +
+                        '. Recent operation history contains ' + recentStationOperations.length + ' item(s).');
+                }
+
+                var proxyHealth = health ? diagnosticValue(health, 'Proxy', 'proxy') : null;
+                if (!proxyHealth || typeof proxyHealth !== 'object') {
+                    diagnosticAddCheck(checks, 'INFO', 'Proxy health',
+                        'This server response does not include proxy health data. Build/install the diagnostics-enabled package and retry.');
+                } else {
+                    var proxyListenerRunning = diagnosticValue(proxyHealth, 'ListenerRunning', 'listenerRunning') === true;
+                    var proxyFfmpegAvailable = diagnosticValue(proxyHealth, 'FfmpegExecutableAvailable', 'ffmpegExecutableAvailable') === true;
+                    var proxyEnabledCount = Number(diagnosticValue(proxyHealth, 'EnabledStationCount', 'enabledStationCount') || 0);
+                    var proxyInvalidCount = Number(diagnosticValue(proxyHealth, 'InvalidSidecarCount', 'invalidSidecarCount') || 0);
+                    var proxyOrphanCount = Number(diagnosticValue(proxyHealth, 'OrphanSidecarCount', 'orphanSidecarCount') || 0);
+                    var proxyMismatchCount = Number(diagnosticValue(proxyHealth, 'SidecarMismatchCount', 'sidecarMismatchCount') || 0);
+                    var proxySidecarScanCompleted = diagnosticValue(proxyHealth, 'SidecarScanCompleted', 'sidecarScanCompleted') === true;
+                    var proxyFolderAvailable = diagnosticValue(health, 'StationFolderAvailable', 'stationFolderAvailable') === true;
+                    var proxyFolderConfigured = diagnosticValue(health, 'StationFolderConfigured', 'stationFolderConfigured') === true;
+                    var proxyActiveClients = Number(diagnosticValue(proxyHealth, 'ActiveClients', 'activeClients') || 0);
+                    var proxyMaxClients = Number(diagnosticValue(proxyHealth, 'MaxConcurrentClients', 'maxConcurrentClients') || 0);
+                    var proxyActiveFfmpeg = Number(diagnosticValue(proxyHealth, 'ActiveFfmpegProcesses', 'activeFfmpegProcesses') || 0);
+                    var proxyMaxFfmpeg = Number(diagnosticValue(proxyHealth, 'MaxConcurrentFfmpegProcesses', 'maxConcurrentFfmpegProcesses') || 0);
+                    var proxySidecarIssues = proxyInvalidCount + proxyOrphanCount + proxyMismatchCount;
+                    var proxyCheckStatus = 'INFO';
+                    var proxyCheckMessage = String(diagnosticValue(proxyHealth, 'ListenerStatus', 'listenerStatus') || 'Proxy listener state unavailable') +
+                        '; proxy-enabled stations=' + proxyEnabledCount + '; FFmpeg available=' + (proxyFfmpegAvailable ? 'yes' : 'no') +
+                        '; sidecar scan=' + String(diagnosticValue(proxyHealth, 'SidecarScanStatus', 'sidecarScanStatus') || 'unknown') + '.';
+                    if (proxySidecarIssues > 0 || (proxyEnabledCount > 0 && (!proxyListenerRunning || !proxyFfmpegAvailable)) ||
+                        (proxyFolderConfigured && !proxyFolderAvailable) || (!proxySidecarScanCompleted && proxyFolderAvailable) ||
+                        (proxyMaxClients > 0 && proxyActiveClients > proxyMaxClients) || (proxyMaxFfmpeg > 0 && proxyActiveFfmpeg > proxyMaxFfmpeg)) {
+                        proxyCheckStatus = 'WARN';
+                    } else if (proxyListenerRunning && proxySidecarScanCompleted) {
+                        proxyCheckStatus = 'PASS';
+                    }
+                    proxyCheckMessage += ' Active clients=' + proxyActiveClients + '/' + proxyMaxClients +
+                        '; active FFmpeg processes=' + proxyActiveFfmpeg + '/' + proxyMaxFfmpeg +
+                        '; accepted connections since startup=' + Number(diagnosticValue(proxyHealth, 'TotalClientConnectionsSinceStart', 'totalClientConnectionsSinceStart') || 0) +
+                        '; FFmpeg starts=' + Number(diagnosticValue(proxyHealth, 'FfmpegStartedProcessesSinceStart', 'ffmpegStartedProcessesSinceStart') || 0) +
+                        '; audio responses=' + Number(diagnosticValue(proxyHealth, 'SuccessfulAudioResponsesSinceStart', 'successfulAudioResponsesSinceStart') || 0) +
+                        '; startup failures=' + Number(diagnosticValue(proxyHealth, 'FfmpegStartupFailuresSinceStart', 'ffmpegStartupFailuresSinceStart') || 0) + '.';
+                    if (!proxyListenerRunning && proxyEnabledCount === 0) {
+                        proxyCheckMessage += ' No proxied stations are currently inventoried; a stopped proxy is not necessarily a playback issue for direct stations.';
+                    }
+                    diagnosticAddCheck(checks, proxyCheckStatus, 'Proxy health', proxyCheckMessage);
+                }
+
+                var runtimeComponents = health ? diagnosticValue(health, 'RuntimeComponents', 'runtimeComponents') : null;
+                if (!runtimeComponents || typeof runtimeComponents !== 'object') {
+                    diagnosticAddCheck(checks, 'INFO', 'Background component health',
+                        'This server response does not include background component start state.');
+                } else {
+                    var stationCaptureStarted = diagnosticValue(runtimeComponents, 'StationCaptureStarted', 'stationCaptureStarted') === true;
+                    var sessionPublisherStarted = diagnosticValue(runtimeComponents, 'SessionMetadataPublisherStarted', 'sessionMetadataPublisherStarted') === true;
+                    var historyStoreStarted = diagnosticValue(runtimeComponents, 'HistoryStoreInitialized', 'historyStoreInitialized') === true;
+                    var componentStatus = stationCaptureStarted && sessionPublisherStarted && historyStoreStarted ? 'PASS' : 'WARN';
+                    diagnosticAddCheck(checks, componentStatus, 'Background component health',
+                        'Playback station capture=' + (stationCaptureStarted ? 'started' : 'NOT STARTED') +
+                        '; session metadata publisher=' + (sessionPublisherStarted ? 'started' : 'NOT STARTED') +
+                        '; history store=' + (historyStoreStarted ? 'initialized' : 'NOT INITIALIZED') + '.');
+                }
+
+                var metadataCache = health ? diagnosticValue(health, 'MetadataCache', 'metadataCache') : null;
+                if (!metadataCache || typeof metadataCache !== 'object') {
+                    diagnosticAddCheck(checks, 'INFO', 'Metadata cache health',
+                        'This server response does not include metadata-cache counts.');
+                } else {
+                    var probeCacheEntries = Number(diagnosticValue(metadataCache, 'ProbeCacheEntries', 'probeCacheEntries') || 0);
+                    var probeCacheMax = Number(diagnosticValue(metadataCache, 'ProbeCacheMaximumEntries', 'probeCacheMaximumEntries') || 0);
+                    var networkCacheEntries = Number(diagnosticValue(metadataCache, 'NetworkCacheEntries', 'networkCacheEntries') || 0);
+                    var networkCacheMax = Number(diagnosticValue(metadataCache, 'NetworkCacheMaximumEntries', 'networkCacheMaximumEntries') || 0);
+                    var negativeCacheEntries = Number(diagnosticValue(metadataCache, 'UnsupportedShoutcastEndpointEntries', 'unsupportedShoutcastEndpointEntries') || 0);
+                    var negativeCacheMax = Number(diagnosticValue(metadataCache, 'UnsupportedShoutcastEndpointMaximumEntries', 'unsupportedShoutcastEndpointMaximumEntries') || 0);
+                    var cacheOverLimit = (probeCacheMax > 0 && probeCacheEntries > probeCacheMax) ||
+                        (networkCacheMax > 0 && networkCacheEntries > networkCacheMax) ||
+                        (negativeCacheMax > 0 && negativeCacheEntries > negativeCacheMax);
+                    diagnosticAddCheck(checks, cacheOverLimit ? 'WARN' : 'PASS', 'Metadata cache health',
+                        'Probe cache=' + probeCacheEntries + '/' + probeCacheMax + ' (fresh=' + Number(diagnosticValue(metadataCache, 'ProbeCacheFreshEntries', 'probeCacheFreshEntries') || 0) +
+                        ', expired=' + Number(diagnosticValue(metadataCache, 'ProbeCacheExpiredEntries', 'probeCacheExpiredEntries') || 0) +
+                        ', TTL=' + Number(diagnosticValue(metadataCache, 'ProbeCacheDurationSeconds', 'probeCacheDurationSeconds') || 0) + 's); network cache=' + networkCacheEntries + '/' + networkCacheMax +
+                        ' (fresh=' + Number(diagnosticValue(metadataCache, 'NetworkCacheFreshEntries', 'networkCacheFreshEntries') || 0) +
+                        ', expired=' + Number(diagnosticValue(metadataCache, 'NetworkCacheExpiredEntries', 'networkCacheExpiredEntries') || 0) +
+                        ', TTL=' + Number(diagnosticValue(metadataCache, 'NetworkCacheDurationSeconds', 'networkCacheDurationSeconds') || 0) + 's); persistent station-specific Shoutcast endpoint records=' +
+                        Number(diagnosticValue(metadataCache, 'UnsupportedShoutcastEndpointActiveEntries', 'unsupportedShoutcastEndpointActiveEntries') || 0) + '/' + negativeCacheEntries +
+                        ' blocked (recovery-ready=' + Number(diagnosticValue(metadataCache, 'UnsupportedShoutcastEndpointExpiredEntries', 'unsupportedShoutcastEndpointExpiredEntries') || 0) +
+                        '). Endpoint records include automatic/manual blocks and transient retry backoff; auto-block recovery requires 24 hours plus 320 uncached station lookups. Stream URLs and cache keys are omitted.');
+                }
+
+                if (metadataCache && typeof metadataCache === 'object') {
+                    var routingPersistenceEnabled = diagnosticValue(metadataCache, 'RoutingStatePersistenceEnabled', 'routingStatePersistenceEnabled') === true;
+                    var routingPersistenceHealthyValue = diagnosticValue(metadataCache, 'RoutingStatePersistenceHealthy', 'routingStatePersistenceHealthy');
+                    var routingPersistenceHealthy = routingPersistenceHealthyValue === true;
+                    var routingStateStatus = routingPersistenceEnabled && routingPersistenceHealthy ? 'PASS' :
+                        (routingPersistenceEnabled && routingPersistenceHealthyValue === false ? 'WARN' : 'INFO');
+                    var routeStateCount = Number(diagnosticValue(metadataCache, 'PersistentAdaptiveStationRoutingEntries', 'persistentAdaptiveStationRoutingEntries') || 0);
+                    var endpointStateCount = Number(diagnosticValue(metadataCache, 'PersistentEndpointStateEntries', 'persistentEndpointStateEntries') || 0);
+                    var autoBlockedCount = Number(diagnosticValue(metadataCache, 'AutomaticallyBlockedEndpointEntries', 'automaticallyBlockedEndpointEntries') || 0);
+                    var manualBlockedCount = Number(diagnosticValue(metadataCache, 'ManuallyBlockedEndpointEntries', 'manuallyBlockedEndpointEntries') || 0);
+                    var backoffCount = Number(diagnosticValue(metadataCache, 'EndpointBackoffEntries', 'endpointBackoffEntries') || 0);
+                    var readyRecoveryCount = Number(diagnosticValue(metadataCache, 'EndpointsReadyForRecoveryProbe', 'endpointsReadyForRecoveryProbe') || 0);
+                    var routeRecheckMin = Number(diagnosticValue(metadataCache, 'RouteRecheckInitialLookups', 'routeRecheckInitialLookups') || 10);
+                    var routeRecheckMax = Number(diagnosticValue(metadataCache, 'RouteRecheckMaximumLookups', 'routeRecheckMaximumLookups') || 80);
+                    var recoveryLookups = Number(diagnosticValue(metadataCache, 'EndpointRecoveryLookupThreshold', 'endpointRecoveryLookupThreshold') || 320);
+                    var recoveryHours = Number(diagnosticValue(metadataCache, 'EndpointPermanentRecoveryHours', 'endpointPermanentRecoveryHours') || 24);
+                    var backoffFirst = Number(diagnosticValue(metadataCache, 'TransientBackoffFirstLookups', 'transientBackoffFirstLookups') || 10);
+                    var backoffMax = Number(diagnosticValue(metadataCache, 'TransientBackoffMaximumLookups', 'transientBackoffMaximumLookups') || 80);
+                    var lastPersisted = diagnosticValue(metadataCache, 'RoutingStateLastPersistedUtc', 'routingStateLastPersistedUtc');
+                    var persistenceError = String(diagnosticValue(metadataCache, 'RoutingStatePersistenceError', 'routingStatePersistenceError') || 'none');
+                    diagnosticAddCheck(checks, routingStateStatus, 'Persistent adaptive routing and endpoint recovery',
+                        'Persistence=' + (routingPersistenceEnabled ? (routingPersistenceHealthy ? 'healthy' : 'ERROR: ' + persistenceError) : 'unavailable') +
+                        '; remembered station preferences=' + routeStateCount +
+                        '; endpoint state entries=' + endpointStateCount +
+                        '; automatic blocks=' + autoBlockedCount +
+                        '; manual blocks=' + manualBlockedCount +
+                        '; transient endpoints in backoff=' + backoffCount +
+                        '; automatic blocks ready for a recovery probe=' + readyRecoveryCount +
+                        '. Transient retry intervals=' + backoffFirst + '/20/40/' + backoffMax + ' eligible uncached lookups; permanent-ish endpoint recovery requires ' + recoveryHours +
+                        ' hours and ' + recoveryLookups + ' eligible lookups. Preferred-source rechecks grow from ' + routeRecheckMin + ' to ' + routeRecheckMax +
+                        ' lookups after consistent wins. State checkpoint time=' + (lastPersisted ? String(lastPersisted) : 'not yet saved') +
+                        '. Station paths may be stored in the state XML; stream URLs/tokens are never included in this report.');
+                }
+
+                var artworkDownloads = health ? diagnosticValue(health, 'ArtworkDownloads', 'artworkDownloads') : null;
+                if (!artworkDownloads || typeof artworkDownloads !== 'object') {
+                    diagnosticAddCheck(checks, 'INFO', 'Artwork download health',
+                        'This server response does not include artwork-download counters.');
+                } else {
+                    var artworkAttempts = Number(diagnosticValue(artworkDownloads, 'DownloadAttemptsSinceStart', 'downloadAttemptsSinceStart') || 0);
+                    var artworkValidated = Number(diagnosticValue(artworkDownloads, 'ValidatedDownloadsSinceStart', 'validatedDownloadsSinceStart') || 0);
+                    var artworkFailed = Number(diagnosticValue(artworkDownloads, 'FailedDownloadsSinceStart', 'failedDownloadsSinceStart') || 0);
+                    var artworkLastStatus = String(diagnosticValue(artworkDownloads, 'LastDownloadStatus', 'lastDownloadStatus') || 'not reported');
+                    var artworkLastFailed = artworkLastStatus.toLowerCase().indexOf('failed') >= 0;
+                    diagnosticAddCheck(checks, artworkLastFailed ? 'WARN' : 'INFO', 'Artwork download health',
+                        'Attempts=' + artworkAttempts + '; validated=' + artworkValidated + '; failed=' + artworkFailed +
+                        '; most recent result=' + artworkLastStatus + '. Counts cover explicit logo URL download/validation attempts since plugin start, not local artwork display.');
+                }
+
+                var stationArtwork = health ? diagnosticValue(health, 'StationArtworkInventory', 'stationArtworkInventory') : null;
+                if (!stationArtwork || typeof stationArtwork !== 'object') {
+                    diagnosticAddCheck(checks, 'INFO', 'Local station artwork inventory',
+                        'This server response does not include local artwork inventory.');
+                } else {
+                    var artworkInventoryDone = diagnosticValue(stationArtwork, 'Completed', 'completed') === true;
+                    var artworkInventoryStatus = String(diagnosticValue(stationArtwork, 'Status', 'status') || 'not checked');
+                    var automaticFolderMode = artworkInventoryStatus.toLowerCase().indexOf('automatic station-folder mode') >= 0;
+                    var artworkInventoryCheckStatus = artworkInventoryDone ? 'INFO' : (automaticFolderMode ? 'INFO' : 'WARN');
+                    diagnosticAddCheck(checks, artworkInventoryCheckStatus, 'Local station artwork inventory',
+                        artworkInventoryStatus + ' Scanned station files=' + Number(diagnosticValue(stationArtwork, 'ScannedStationFiles', 'scannedStationFiles') || 0) +
+                        '; with artwork=' + Number(diagnosticValue(stationArtwork, 'StationFilesWithArtwork', 'stationFilesWithArtwork') || 0) +
+                        '; without artwork=' + Number(diagnosticValue(stationArtwork, 'StationFilesWithoutArtwork', 'stationFilesWithoutArtwork') || 0) +
+                        '; scan limit=' + Number(diagnosticValue(stationArtwork, 'SafetyLimit', 'safetyLimit') || 0) + '. Missing artwork is informational, not a playback failure.');
+                }
+
+                function diagnosticMemoryMiB(value) {
+                    return value === null || value === undefined || !isFinite(Number(value)) ? 'n/a' : (Number(value) / 1048576).toFixed(1) + ' MiB';
+                }
+                var memory = health ? diagnosticValue(health, 'Memory', 'memory') : null;
+                if (!memory || typeof memory !== 'object' || diagnosticValue(memory, 'Available', 'available') !== true) {
+                    diagnosticAddCheck(checks, 'INFO', 'Memory trend monitor',
+                        'This server response does not include memory telemetry. Install a Radio Meta build with the memory trend monitor to enable this check.');
+                } else {
+                    var memorySamples = Number(diagnosticValue(memory, 'RetainedSampleCount', 'retainedSampleCount') || 0);
+                    var memoryWindowMinutes = Number(diagnosticValue(memory, 'ObservedWindowMinutes', 'observedWindowMinutes') || 0);
+                    var memoryPotentialGrowth = diagnosticValue(memory, 'PotentialGrowthDetected', 'potentialGrowthDetected') === true;
+                    var memoryReady = diagnosticValue(memory, 'TrendAssessmentReady', 'trendAssessmentReady') === true;
+                    var memoryTrendAssessment = String(diagnosticValue(memory, 'TrendAssessment', 'trendAssessment') || 'No assessment was returned.');
+                    var memoryWorkingSet = diagnosticValue(memory, 'CurrentWorkingSetBytes', 'currentWorkingSetBytes');
+                    var memoryPrivate = diagnosticValue(memory, 'CurrentPrivateMemoryBytes', 'currentPrivateMemoryBytes');
+                    var memoryManaged = Number(diagnosticValue(memory, 'CurrentManagedHeapBytes', 'currentManagedHeapBytes') || 0);
+                    diagnosticAddCheck(checks, memoryPotentialGrowth ? 'WARN' : (memoryReady ? 'PASS' : 'INFO'), 'Memory trend monitor',
+                        'Process working set=' + diagnosticMemoryMiB(memoryWorkingSet) + '; private memory=' + diagnosticMemoryMiB(memoryPrivate) +
+                        '; managed heap=' + diagnosticMemoryMiB(memoryManaged) + '; samples=' + memorySamples + '/' + Number(diagnosticValue(memory, 'MaximumRetainedSamples', 'maximumRetainedSamples') || 0) +
+                        '; window=' + memoryWindowMinutes.toFixed(1) + ' min; sample interval=' + Number(diagnosticValue(memory, 'SamplingIntervalSeconds', 'samplingIntervalSeconds') || 0) + ' s. ' +
+                        memoryTrendAssessment + ' Metrics are process-wide and shared with Emby and all plugins.');
+                }
+
                 var headerLines = [
                     'RADIO META DIAGNOSTIC REPORT',
                     'Generated (UTC): ' + startedAt.toISOString(),
@@ -2833,8 +3695,11 @@ define([], function () {
                     'Page path: ' + pagePath,
                     'Browser: ' + userAgent,
                     'Loader state: ' + loaderState,
-                    'Loader error recorded: ' + (loaderErrorPresent ? String(window.__radioMetaDisplayLoaderError || 'yes').slice(0, 240) : 'no'),
+                    'Loader error recorded: ' + (loaderErrorPresent ? diagnosticSanitizeError(window.__radioMetaDisplayLoaderError || 'yes') : 'no'),
                     'Display helper global present: ' + (helperLoaded ? 'yes' : 'no'),
+                    'Local Emby session matched: ' + (localSession ? 'yes' : 'no'),
+                    'Local session has Now Playing item: ' + (localSession && diagnosticValue(localSession, 'NowPlayingItem', 'nowPlayingItem') ? 'yes' : 'no'),
+                    'Local session has Radio Meta metadata: ' + (localRadioSession ? 'yes' : 'no'),
                     'Current accepted tracks: ' + (health ? String(diagnosticValue(health, 'CurrentTrackCount', 'currentTrackCount') || 0) : 'unknown'),
                     'Radio Meta-bearing Emby sessions: ' + activeRadioSessions.length
                 ];
@@ -2853,6 +3718,8 @@ define([], function () {
                         (diagnosticValue(health, 'ConfigurationAvailable', 'configurationAvailable') === true ? 'yes' : 'no'));
                     headerLines.push('Embedded display resource present in DLL: ' +
                         (diagnosticValue(health, 'DisplayHelperResourceEmbedded', 'displayHelperResourceEmbedded') === true ? 'yes' : 'no'));
+                    headerLines.push('Embedded display loader resource present in DLL: ' +
+                        (diagnosticValue(health, 'DisplayLoaderResourceEmbedded', 'displayLoaderResourceEmbedded') === true ? 'yes' : 'no'));
                     var healthTracks = diagnosticValue(health, 'CurrentTracks', 'currentTracks') || [];
                     if (healthTracks.length) {
                         headerLines.push('Recent accepted metadata (up to 10):');
@@ -2865,7 +3732,128 @@ define([], function () {
                                 String(diagnosticValue(track, 'UpdatedAt', 'updatedAt') || 'unknown'));
                         });
                     }
+                    var operationReport = diagnosticValue(health, 'RecentStationOperations', 'recentStationOperations');
+                    if (Array.isArray(operationReport)) {
+                        headerLines.push('Recent station-file operations (in-memory; paths and URLs omitted):');
+                        if (!operationReport.length) {
+                            headerLines.push('  No station create/edit/delete/proxy operations recorded since plugin startup.');
+                        } else {
+                            operationReport.slice(0, 12).forEach(function (operation) {
+                                headerLines.push('  ' +
+                                    String(diagnosticValue(operation, 'TimestampUtc', 'timestampUtc') || 'time unknown') + ' | ' +
+                                    String(diagnosticValue(operation, 'Operation', 'operation') || 'unknown operation') + ' | ' +
+                                    String(diagnosticValue(operation, 'StationName', 'stationName') || 'unnamed station') +
+                                    ' | file=' + String(diagnosticValue(operation, 'FileChangeStatus', 'fileChangeStatus') || 'unknown') +
+                                    ' | proxy sidecar=' + String(diagnosticValue(operation, 'ProxySidecarStatus', 'proxySidecarStatus') || 'unknown') +
+                                    ' | library refresh=' + String(diagnosticValue(operation, 'LibraryRefreshStatus', 'libraryRefreshStatus') || 'unknown') +
+                                    ' | station-list refresh=' + String(diagnosticValue(operation, 'StationListRefreshStatus', 'stationListRefreshStatus') || 'unknown') +
+                                    ' | ' + String(diagnosticValue(operation, 'Details', 'details') || ''));
+                            });
+                        }
+                    }
                 }
+                var proxyReportData = health ? diagnosticValue(health, 'Proxy', 'proxy') : null;
+                if (proxyReportData && typeof proxyReportData === 'object') {
+                    headerLines.push('Proxy health (privacy-safe; no paths, URLs, or tokens): status=' +
+                        String(diagnosticValue(proxyReportData, 'ListenerStatus', 'listenerStatus') || 'unknown') +
+                        '; bind=' + String(diagnosticValue(proxyReportData, 'BindScope', 'bindScope') || 'unknown') +
+                        ' (' + String(diagnosticValue(proxyReportData, 'BindAddress', 'bindAddress') || 'unknown') + ')' +
+                        '; port=' + Number(diagnosticValue(proxyReportData, 'Port', 'port') || 0) +
+                        '; FFmpeg available=' + (diagnosticValue(proxyReportData, 'FfmpegExecutableAvailable', 'ffmpegExecutableAvailable') === true ? 'yes' : 'no') +
+                        '; enabled station files=' + Number(diagnosticValue(proxyReportData, 'EnabledStationCount', 'enabledStationCount') || 0) +
+                        '; sidecars=' + Number(diagnosticValue(proxyReportData, 'ProxySidecarCount', 'proxySidecarCount') || 0) +
+                        '; invalid=' + Number(diagnosticValue(proxyReportData, 'InvalidSidecarCount', 'invalidSidecarCount') || 0) +
+                        '; orphaned=' + Number(diagnosticValue(proxyReportData, 'OrphanSidecarCount', 'orphanSidecarCount') || 0) +
+                        '; mismatched=' + Number(diagnosticValue(proxyReportData, 'SidecarMismatchCount', 'sidecarMismatchCount') || 0) +
+                        '; inventory=' + String(diagnosticValue(proxyReportData, 'SidecarScanStatus', 'sidecarScanStatus') || 'unknown'));
+                    headerLines.push('Proxy activity since plugin start: accepted client connections=' + Number(diagnosticValue(proxyReportData, 'TotalClientConnectionsSinceStart', 'totalClientConnectionsSinceStart') || 0) +
+                        '; FFmpeg starts attempted=' + Number(diagnosticValue(proxyReportData, 'FfmpegStartAttemptsSinceStart', 'ffmpegStartAttemptsSinceStart') || 0) +
+                        '; FFmpeg starts=' + Number(diagnosticValue(proxyReportData, 'FfmpegStartedProcessesSinceStart', 'ffmpegStartedProcessesSinceStart') || 0) +
+                        '; audio responses=' + Number(diagnosticValue(proxyReportData, 'SuccessfulAudioResponsesSinceStart', 'successfulAudioResponsesSinceStart') || 0) +
+                        '; startup failures=' + Number(diagnosticValue(proxyReportData, 'FfmpegStartupFailuresSinceStart', 'ffmpegStartupFailuresSinceStart') || 0) +
+                        '; active clients=' + Number(diagnosticValue(proxyReportData, 'ActiveClients', 'activeClients') || 0) + '/' + Number(diagnosticValue(proxyReportData, 'MaxConcurrentClients', 'maxConcurrentClients') || 0) +
+                        '; active FFmpeg processes=' + Number(diagnosticValue(proxyReportData, 'ActiveFfmpegProcesses', 'activeFfmpegProcesses') || 0) + '/' + Number(diagnosticValue(proxyReportData, 'MaxConcurrentFfmpegProcesses', 'maxConcurrentFfmpegProcesses') || 0));
+                }
+
+                var runtimeComponentReport = health ? diagnosticValue(health, 'RuntimeComponents', 'runtimeComponents') : null;
+                if (runtimeComponentReport && typeof runtimeComponentReport === 'object') {
+                    headerLines.push('Background component health: station capture=' +
+                        (diagnosticValue(runtimeComponentReport, 'StationCaptureStarted', 'stationCaptureStarted') === true ? 'started' : 'not started') +
+                        '; session metadata publisher=' +
+                        (diagnosticValue(runtimeComponentReport, 'SessionMetadataPublisherStarted', 'sessionMetadataPublisherStarted') === true ? 'started' : 'not started') +
+                        '; history store=' +
+                        (diagnosticValue(runtimeComponentReport, 'HistoryStoreInitialized', 'historyStoreInitialized') === true ? 'initialized' : 'not initialized'));
+                }
+                var metadataCacheReport = health ? diagnosticValue(health, 'MetadataCache', 'metadataCache') : null;
+                if (metadataCacheReport && typeof metadataCacheReport === 'object') {
+                    headerLines.push('Metadata cache health (counts only): probe=' + Number(diagnosticValue(metadataCacheReport, 'ProbeCacheEntries', 'probeCacheEntries') || 0) +
+                        '/' + Number(diagnosticValue(metadataCacheReport, 'ProbeCacheMaximumEntries', 'probeCacheMaximumEntries') || 0) +
+                        '; fresh=' + Number(diagnosticValue(metadataCacheReport, 'ProbeCacheFreshEntries', 'probeCacheFreshEntries') || 0) +
+                        '; expired=' + Number(diagnosticValue(metadataCacheReport, 'ProbeCacheExpiredEntries', 'probeCacheExpiredEntries') || 0) +
+                        '; network=' + Number(diagnosticValue(metadataCacheReport, 'NetworkCacheEntries', 'networkCacheEntries') || 0) +
+                        '/' + Number(diagnosticValue(metadataCacheReport, 'NetworkCacheMaximumEntries', 'networkCacheMaximumEntries') || 0) +
+                        '; fresh=' + Number(diagnosticValue(metadataCacheReport, 'NetworkCacheFreshEntries', 'networkCacheFreshEntries') || 0) +
+                        '; expired=' + Number(diagnosticValue(metadataCacheReport, 'NetworkCacheExpiredEntries', 'networkCacheExpiredEntries') || 0) +
+                        '; unsupported Shoutcast endpoints active=' + Number(diagnosticValue(metadataCacheReport, 'UnsupportedShoutcastEndpointActiveEntries', 'unsupportedShoutcastEndpointActiveEntries') || 0) +
+                        '/' + Number(diagnosticValue(metadataCacheReport, 'UnsupportedShoutcastEndpointEntries', 'unsupportedShoutcastEndpointEntries') || 0) +
+                        '; expired=' + Number(diagnosticValue(metadataCacheReport, 'UnsupportedShoutcastEndpointExpiredEntries', 'unsupportedShoutcastEndpointExpiredEntries') || 0));
+                }
+                var memoryReport = diagnosticValue(health, 'Memory', 'memory');
+                    if (memoryReport && typeof memoryReport === 'object') {
+                        headerLines.push('Memory trend monitor (process-wide; shared by Emby and all plugins; no forced GC): sampling=' +
+                            (diagnosticValue(memoryReport, 'SamplingEnabled', 'samplingEnabled') === true ? 'enabled' : 'disabled') +
+                            '; interval=' + Number(diagnosticValue(memoryReport, 'SamplingIntervalSeconds', 'samplingIntervalSeconds') || 0) + 's' +
+                            '; retained=' + Number(diagnosticValue(memoryReport, 'RetainedSampleCount', 'retainedSampleCount') || 0) + '/' + Number(diagnosticValue(memoryReport, 'MaximumRetainedSamples', 'maximumRetainedSamples') || 0) +
+                            '; observed window=' + Number(diagnosticValue(memoryReport, 'ObservedWindowMinutes', 'observedWindowMinutes') || 0).toFixed(1) + ' minutes' +
+                            '; oldest=' + String(diagnosticValue(memoryReport, 'FirstSampleAtUtc', 'firstSampleAtUtc') || 'not recorded') +
+                            '; newest=' + String(diagnosticValue(memoryReport, 'LatestSampleAtUtc', 'latestSampleAtUtc') || 'not recorded'));
+                        headerLines.push('Memory current: working set=' + diagnosticMemoryMiB(diagnosticValue(memoryReport, 'CurrentWorkingSetBytes', 'currentWorkingSetBytes')) +
+                            '; private=' + diagnosticMemoryMiB(diagnosticValue(memoryReport, 'CurrentPrivateMemoryBytes', 'currentPrivateMemoryBytes')) +
+                            '; managed heap=' + diagnosticMemoryMiB(diagnosticValue(memoryReport, 'CurrentManagedHeapBytes', 'currentManagedHeapBytes')) +
+                            '; cumulative allocated=' + diagnosticMemoryMiB(diagnosticValue(memoryReport, 'CurrentTotalAllocatedBytesSinceProcessStart', 'currentTotalAllocatedBytesSinceProcessStart')) +
+                            '; threads=' + (diagnosticValue(memoryReport, 'CurrentProcessThreadCount', 'currentProcessThreadCount') == null ? 'n/a' : String(diagnosticValue(memoryReport, 'CurrentProcessThreadCount', 'currentProcessThreadCount'))) +
+                            '; handles=' + (diagnosticValue(memoryReport, 'CurrentProcessHandleCount', 'currentProcessHandleCount') == null ? 'n/a' : String(diagnosticValue(memoryReport, 'CurrentProcessHandleCount', 'currentProcessHandleCount'))) +
+                            '; GC collections Gen0/1/2=' + Number(diagnosticValue(memoryReport, 'CurrentGen0Collections', 'currentGen0Collections') || 0) + '/' +
+                            Number(diagnosticValue(memoryReport, 'CurrentGen1Collections', 'currentGen1Collections') || 0) + '/' + Number(diagnosticValue(memoryReport, 'CurrentGen2Collections', 'currentGen2Collections') || 0));
+                        headerLines.push('Memory change oldest-to-current: working set=' + diagnosticMemoryMiB(diagnosticValue(memoryReport, 'WorkingSetChangeFromFirstBytes', 'workingSetChangeFromFirstBytes')) +
+                            '; private=' + diagnosticMemoryMiB(diagnosticValue(memoryReport, 'PrivateMemoryChangeFromFirstBytes', 'privateMemoryChangeFromFirstBytes')) +
+                            '; managed heap=' + diagnosticMemoryMiB(diagnosticValue(memoryReport, 'ManagedHeapChangeFromFirstBytes', 'managedHeapChangeFromFirstBytes')) +
+                            '; peaks: working set=' + diagnosticMemoryMiB(diagnosticValue(memoryReport, 'PeakWorkingSetBytes', 'peakWorkingSetBytes')) +
+                            ', private=' + diagnosticMemoryMiB(diagnosticValue(memoryReport, 'PeakPrivateMemoryBytes', 'peakPrivateMemoryBytes')) +
+                            ', managed heap=' + diagnosticMemoryMiB(diagnosticValue(memoryReport, 'PeakManagedHeapBytes', 'peakManagedHeapBytes')) + '.');
+                        headerLines.push('Memory assessment: ' + String(diagnosticValue(memoryReport, 'TrendAssessment', 'trendAssessment') || 'not available'));
+                        headerLines.push('Memory warning thresholds: assessed after at least 60 minutes and 13 periodic samples; private-memory growth >=128 MiB and >=20%, or managed-heap growth >=64 MiB and >=25%, compared with the oldest retained sample (up to seven days). Samples are held in RAM only and reset when Emby restarts.');
+                        var memorySamplesForReport = diagnosticValue(memoryReport, 'RecentSamples', 'recentSamples') || [];
+                        if (memorySamplesForReport.length) {
+                            headerLines.push('Memory trend samples (hourly across retained history plus most recent four hours at five-minute resolution; UTC; MiB):');
+                            memorySamplesForReport.forEach(function (sample) {
+                                headerLines.push('  ' + String(diagnosticValue(sample, 'TimestampUtc', 'timestampUtc') || 'unknown time') +
+                                    ' | working set=' + diagnosticMemoryMiB(diagnosticValue(sample, 'ProcessWorkingSetBytes', 'processWorkingSetBytes')) +
+                                    ' | private=' + diagnosticMemoryMiB(diagnosticValue(sample, 'ProcessPrivateMemoryBytes', 'processPrivateMemoryBytes')) +
+                                    ' | managed heap=' + diagnosticMemoryMiB(diagnosticValue(sample, 'ManagedHeapBytes', 'managedHeapBytes')) +
+                                    ' | allocated=' + diagnosticMemoryMiB(diagnosticValue(sample, 'TotalAllocatedBytesSinceProcessStart', 'totalAllocatedBytesSinceProcessStart')) +
+                                    ' | Gen2=' + Number(diagnosticValue(sample, 'Gen2Collections', 'gen2Collections') || 0));
+                            });
+                        }
+                    }
+
+                    var artworkDownloadReport = health ? diagnosticValue(health, 'ArtworkDownloads', 'artworkDownloads') : null;
+                if (artworkDownloadReport && typeof artworkDownloadReport === 'object') {
+                    headerLines.push('Artwork URL downloads since plugin start: attempts=' + Number(diagnosticValue(artworkDownloadReport, 'DownloadAttemptsSinceStart', 'downloadAttemptsSinceStart') || 0) +
+                        '; validated=' + Number(diagnosticValue(artworkDownloadReport, 'ValidatedDownloadsSinceStart', 'validatedDownloadsSinceStart') || 0) +
+                        '; failed=' + Number(diagnosticValue(artworkDownloadReport, 'FailedDownloadsSinceStart', 'failedDownloadsSinceStart') || 0) +
+                        '; last status=' + String(diagnosticValue(artworkDownloadReport, 'LastDownloadStatus', 'lastDownloadStatus') || 'not reported') +
+                        '; last at UTC=' + String(diagnosticValue(artworkDownloadReport, 'LastDownloadAtUtc', 'lastDownloadAtUtc') || 'not recorded'));
+                }
+                var stationArtworkReport = health ? diagnosticValue(health, 'StationArtworkInventory', 'stationArtworkInventory') : null;
+                if (stationArtworkReport && typeof stationArtworkReport === 'object') {
+                    headerLines.push('Local station artwork inventory: status=' + String(diagnosticValue(stationArtworkReport, 'Status', 'status') || 'not checked') +
+                        '; scanned=' + Number(diagnosticValue(stationArtworkReport, 'ScannedStationFiles', 'scannedStationFiles') || 0) +
+                        '; with artwork=' + Number(diagnosticValue(stationArtworkReport, 'StationFilesWithArtwork', 'stationFilesWithArtwork') || 0) +
+                        '; without artwork=' + Number(diagnosticValue(stationArtworkReport, 'StationFilesWithoutArtwork', 'stationFilesWithoutArtwork') || 0) +
+                        '; scan limit=' + Number(diagnosticValue(stationArtworkReport, 'SafetyLimit', 'safetyLimit') || 0));
+                }
+
                 if (activeRadioSessions.length) {
                     headerLines.push('Active Radio Meta sessions:');
                     activeRadioSessions.slice(0, 8).forEach(function (entry) {
@@ -2877,6 +3865,50 @@ define([], function () {
                     });
                 }
 
+                try {
+                    var reportRuntime = typeof window.__radioMetaDisplayDiagnostics_v1379 === 'function' ? window.__radioMetaDisplayDiagnostics_v1379() : null;
+                    if (reportRuntime) {
+                        headerLines.push('Display helper version: ' + String(reportRuntime.displayHelperVersion || 'unknown'));
+                        headerLines.push('Display helper polling: status=' + String(reportRuntime.lastPollStatus || 'unknown') +
+                            '; count=' + Number(reportRuntime.pollCount || 0) + '; last duration=' + Number(reportRuntime.lastPollDurationMs || 0) + ' ms' +
+                            '; session count=' + Number(reportRuntime.lastSessionCount || 0));
+                        headerLines.push('Display helper cache: present=' + (reportRuntime.currentTrackCached ? 'yes' : 'no') +
+                            '; age=' + (reportRuntime.currentTrackCacheAgeMs == null ? 'n/a' : Math.round(reportRuntime.currentTrackCacheAgeMs) + ' ms'));
+                        headerLines.push('Station cache: entries=' + Number(reportRuntime.stationCacheEntryCount || 0) +
+                            '; active key present=' + (reportRuntime.activeStationCacheKeyPresent ? 'yes' : 'no') +
+                            '; active track reused from recent station cache=' + (reportRuntime.activeTrackFromRecentStationCache ? 'yes' : 'no') +
+                            '; most recent reuse=' + (reportRuntime.lastStationCacheReuse ? 'yes' : 'no'));
+                        headerLines.push('Station-switch reinforcement: CurrentTracks result=' + String(reportRuntime.lastCurrentTracksFallbackResult || 'never') +
+                            '; successful server fallbacks=' + Number(reportRuntime.currentTracksFallbackSuccessCount || 0) +
+                            '; consecutive misses=' + Number(reportRuntime.currentTracksFallbackMisses || 0) +
+                            '; latest fallback station=' + String(reportRuntime.lastCurrentTracksFallbackStation || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 80) +
+                            '; successful Media Session republishes=' + Number(reportRuntime.stationTransitionRepublishCount || 0) +
+                            '; last republish=' + String(reportRuntime.lastStationTransitionRepublishReason || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 60));
+                        headerLines.push('Station transition: pending=' + (reportRuntime.stationTransitionPending ? 'yes' : 'no') +
+                            '; stale transition tracks rejected=' + Number(reportRuntime.staleTransitionTrackRejections || 0) +
+                            '; immediate refresh count=' + Number(reportRuntime.immediateRefreshCount || 0) +
+                            '; .strm fallback count=' + Number(reportRuntime.stationTransitionFallbackCount || 0) +
+                            '; last fallback station=' + String(reportRuntime.lastStationTransitionFallbackStation || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 80) +
+                            '; fallback source=' + String(reportRuntime.lastStationTransitionFallbackSource || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 40) +
+                            '; last poll status=' + String(reportRuntime.lastPollStatus || 'unknown').replace(/[\r\n]/g, ' ').slice(0, 60) +
+                            '; last fallback at UTC=' + String(reportRuntime.lastStationTransitionFallbackAtUtc || 'not recorded') +
+                            '; queued=' + (reportRuntime.immediateRefreshQueued ? 'yes' : 'no') +
+                            '; last reason=' + String(reportRuntime.lastImmediateRefreshReason || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 100) +
+                            '; last at UTC=' + String(reportRuntime.lastImmediateRefreshAtUtc || 'not recorded'));
+                        headerLines.push('Pending radio metadata: active=' + (reportRuntime.radioPlaybackPending ? 'yes' : 'no') +
+                            '; elapsed=' + Math.round(Number(reportRuntime.radioPlaybackPendingElapsedMs || 0) / 1000) + ' s' +
+                            '; timeout expired=' + (reportRuntime.pendingExpired ? 'yes' : 'no'));
+                        var reportAdapterStatus = reportRuntime.outputAdapterStatus || {};
+                        var reportAdapterErrors = reportRuntime.outputAdapterErrors || {};
+                        Object.keys(reportAdapterStatus).forEach(function (adapterName) {
+                            headerLines.push('Display adapter ' + adapterName + ': ' + String(reportAdapterStatus[adapterName] || 'unknown') +
+                                (reportAdapterErrors[adapterName] ? ' | ' + diagnosticSanitizeError(reportAdapterErrors[adapterName]) : ''));
+                        });
+                        if (reportRuntime.lastPollError) headerLines.push('Display helper last poll error: ' + String(reportRuntime.lastPollError).slice(0, 240));
+                    } else {
+                        headerLines.push('Display helper runtime telemetry: unavailable (older helper or initialization failure).');
+                    }
+                } catch (_) {}
                 diagnosticRender(checks, headerLines, health ? (diagnosticValue(health, 'RecentEvents', 'recentEvents') || []) : [], health ? diagnosticValue(health, 'Performance', 'performance') : null);
             }).catch(function (error) {
                 diagnosticAddCheck(checks, 'FAIL', 'Diagnostic runner',
@@ -3319,6 +4351,183 @@ define([], function () {
                     button.disabled = false;
                     button.textContent = previousText || 'Add to Radio Meta';
                 });
+        }
+
+        // Optional paste-import for Radio Meta Stream Capture JSON.
+        // This remains isolated to the existing Station Name field and does not
+        // change ordinary station creation or metadata capture behavior.
+        function parseRadioMetaStreamCapturePaste(rawText) {
+            if (typeof rawText !== 'string' || rawText.length > 250000) {
+                return { recognized: false };
+            }
+            var text = rawText.trim();
+            if (!text || text.charAt(0) !== '{') return { recognized: false };
+
+            var payload;
+            try {
+                payload = JSON.parse(text);
+            } catch (parseError) {
+                return /radiometa-add-station-capture/i.test(text)
+                    ? { recognized: true, error: 'The pasted Stream Capture data is not valid JSON. Copy Add Data again and retry.' }
+                    : { recognized: false };
+            }
+            if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
+                String(payload.schema || '') !== 'radiometa-add-station-capture') {
+                return { recognized: false };
+            }
+
+            var schemaVersion = Number(payload.schemaVersion == null ? 1 : payload.schemaVersion);
+            if (schemaVersion !== 1) {
+                return { recognized: true, error: 'This Stream Capture schema version (' + String(payload.schemaVersion) + ') is not supported. Use a compatible Radio Meta Stream Capture version.' };
+            }
+
+            function firstText(values) {
+                for (var index = 0; index < values.length; index++) {
+                    var value = values[index];
+                    if (typeof value === 'string' && value.trim()) return value.trim();
+                }
+                return '';
+            }
+            function objectUrl(value) {
+                if (typeof value === 'string') return value.trim();
+                if (value && typeof value === 'object' && typeof value.url === 'string') return value.url.trim();
+                return '';
+            }
+            function validHttpUrl(value) {
+                if (!value || value.length > 2048) return false;
+                try {
+                    var parsed = new URL(value);
+                    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && !!parsed.hostname;
+                } catch (urlError) {
+                    return false;
+                }
+            }
+
+            var icy = payload.icyMetadataProbe && typeof payload.icyMetadataProbe === 'object'
+                ? payload.icyMetadataProbe : {};
+            var stationArtwork = payload.stationArtwork;
+            var logoUrl = firstText([
+                payload.stationArtworkUrl,
+                payload.stationLogoUrl,
+                payload.stationLogoURL,
+                payload.logoUrl,
+                payload.artworkUrl,
+                payload.artworkURL,
+                objectUrl(stationArtwork),
+                objectUrl(payload.stationLogo),
+                objectUrl(payload.stationArt)
+            ]);
+            // Compatible with Capture v1.0.2 payloads which include ranked artwork candidates.
+            if (!logoUrl && Array.isArray(payload.stationArtworkCandidates)) {
+                var recommendedArtwork = payload.stationArtworkCandidates.find(function (item) {
+                    return item && typeof item.url === 'string' && item.url.trim() &&
+                        (item.selected === true || item.isSelected === true || item.chosen === true);
+                });
+                if (!recommendedArtwork) {
+                    recommendedArtwork = payload.stationArtworkCandidates.find(function (item) {
+                        return item && typeof item.url === 'string' && item.url.trim() &&
+                            /station|logo|brand/i.test(String(item.role || '') + ' ' + String(item.source || ''));
+                    });
+                }
+                if (recommendedArtwork) logoUrl = recommendedArtwork.url.trim();
+            }
+
+            var name = firstText([
+                payload.stationName,
+                payload.stationNameCandidate,
+                icy.stationName,
+                icy.icyName,
+                payload.station && (payload.station.name || payload.station.stationName)
+            ]);
+            var streamUrl = firstText([
+                payload.streamUrl,
+                payload.StreamUrl,
+                payload.stream && (payload.stream.url || payload.stream.streamUrl)
+            ]);
+
+            return {
+                recognized: true,
+                schemaVersion: schemaVersion,
+                stationName: name,
+                streamUrl: streamUrl,
+                stationArtworkUrl: logoUrl,
+                streamType: firstText([payload.streamTypeLabel, payload.streamType]),
+                icyStatus: firstText([icy.status]),
+                icyReasonCode: firstText([icy.reasonCode]),
+                hasArtworkField: !!logoUrl,
+                validStreamUrl: validHttpUrl(streamUrl),
+                validArtworkUrl: validHttpUrl(logoUrl)
+            };
+        }
+
+        function importRadioMetaStreamCapturePaste(event) {
+            var clipboard = event && (event.clipboardData || window.clipboardData);
+            if (!clipboard || typeof clipboard.getData !== 'function') return;
+            var pastedText = '';
+            try { pastedText = clipboard.getData('text/plain') || clipboard.getData('text') || ''; }
+            catch (clipboardError) { return; }
+
+            var imported = parseRadioMetaStreamCapturePaste(pastedText);
+            if (!imported.recognized) return; // Ordinary station-name pastes are unchanged.
+            event.preventDefault();
+
+            var status = view.querySelector('#radioStationCreateStatus');
+            var nameInput = view.querySelector('#radioStationCreateName');
+            var urlInput = view.querySelector('#radioStationCreateUrl');
+            var artworkInput = view.querySelector('#radioStationCreateArtworkUrl');
+            if (!nameInput || !urlInput || !artworkInput) {
+                if (status) status.textContent = 'Stream Capture data was recognized, but the station form fields could not be found.';
+                return;
+            }
+            if (imported.error) {
+                if (status) status.textContent = imported.error;
+                return;
+            }
+
+            // Replace all three fields together to avoid accidentally reusing a prior
+            // station's stream or artwork when the capture does not contain that field.
+            var warnings = [];
+            var name = imported.stationName || '';
+            if (name.length > 160) {
+                name = name.slice(0, 160);
+                warnings.push('station name was shortened to the 160-character field limit');
+            }
+            var streamUrl = imported.validStreamUrl ? imported.streamUrl : '';
+            if (imported.streamUrl && !imported.validStreamUrl) {
+                warnings.push('stream URL was not imported because it is not a valid HTTP/HTTPS URL or exceeds the 2048-character field limit');
+            } else if (!imported.streamUrl) {
+                warnings.push('capture did not contain a stream URL');
+            }
+            var artworkUrl = imported.validArtworkUrl ? imported.stationArtworkUrl : '';
+            if (imported.stationArtworkUrl && !imported.validArtworkUrl) {
+                warnings.push('artwork URL was not imported because it is not a valid HTTP/HTTPS URL or exceeds the 2048-character field limit');
+            } else if (!imported.stationArtworkUrl) {
+                warnings.push('this capture did not include a station artwork URL; the logo field was cleared');
+            }
+            if (!name) warnings.push('station name was not present in the capture');
+
+            nameInput.value = name;
+            urlInput.value = streamUrl;
+            artworkInput.value = artworkUrl;
+
+            setCurrentStreamTestResult('idle', 'Stream Capture imported · stream not tested.', 'Pasting capture data only fills the form. It does not run a metadata test or create station files.');
+            if (status) {
+                status.textContent = 'Imported Stream Capture data' +
+                    (name ? ': station name' : '') +
+                    (streamUrl ? (name ? ', ' : ': ') + 'stream URL' : '') +
+                    (artworkUrl ? ', station artwork URL' : '') +
+                    '. Review every field before clicking Create .strm. No files have been created.' +
+                    (imported.streamType ? ' Detected stream type: ' + imported.streamType + '.' : '') +
+                    (imported.icyStatus ? ' ICY check: ' + imported.icyStatus + (imported.icyReasonCode ? ' (' + imported.icyReasonCode + ')' : '') + '.' : '') +
+                    (warnings.length ? ' Check: ' + warnings.join('; ') + '.' : '');
+            }
+            if (typeof nameInput.scrollIntoView === 'function') nameInput.scrollIntoView({ block: 'center', behavior: 'auto' });
+            (name ? (streamUrl ? (artworkUrl ? nameInput : artworkInput) : urlInput) : nameInput).focus();
+        }
+
+        var stationCreateNamePasteInput = view.querySelector('#radioStationCreateName');
+        if (stationCreateNamePasteInput) {
+            stationCreateNamePasteInput.addEventListener('paste', importRadioMetaStreamCapturePaste);
         }
 
         var stationAddCurrentButton = view.querySelector('#radioStationAddCurrentButton');

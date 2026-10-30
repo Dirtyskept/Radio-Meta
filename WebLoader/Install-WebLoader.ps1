@@ -62,7 +62,7 @@ $acceptedHashes = @(
 if ($currentHash -notin $acceptedHashes) { throw "Safety stop: target hash $currentHash is not recognized. No files changed. This package targets the stock Emby 4.10.1 dashboard or a known Radio Meta integration release." }
 if ($currentHash -eq $expectedPayloadHash) { Write-Host 'The Radio Meta plugin loader is already installed and hash-verified.' -ForegroundColor Green; exit 0 }
 Write-Host ''
-Write-Host 'Radio Meta v1.3.74 — Web loader installer (Rev 7 Minimal DLL Pointer)' -ForegroundColor Cyan
+Write-Host 'Radio Meta v1.3.96 — WebLoader installer (DLL-hosted helper pointer)' -ForegroundColor Cyan
 Write-Host ("Target file: {0}" -f $target)
 Write-Host 'This changes only nowplayingbar.js: stock Emby code plus a minimal AMD pointer to the loader module embedded in RadioMeta.dll.'
 Write-Host 'Build/install the matching Radio Meta plugin DLL and restart Emby before testing the display helper.'
@@ -77,7 +77,7 @@ Copy-Item -LiteralPath $target -Destination $backupPath -Force
 $backupHash = (Get-FileHash -LiteralPath $backupPath -Algorithm SHA256).Hash.ToUpperInvariant()
 if ($backupHash -ne $currentHash) { throw 'Pre-install backup verification failed. No replacement attempted.' }
 $state = [pscustomobject]@{
-    PackageVersion = '1.3.74-Rev7-Minimal-DLL-Pointer'
+    PackageVersion = '1.3.96-WebLoader-DLL-Pointer'
     ComputerName = $env:COMPUTERNAME
     DashboardRoot = $dashboardRoot
     BackupRoot = $backupRoot

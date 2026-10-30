@@ -1,0 +1,16 @@
+Radio Meta v1.7.12 — Bounded Memory Trend Diagnostics
+
+Baseline
+- Based on v1.7.11 Station Delay Mode / adaptive metadata routing experiment.
+- Retains the metadata readers, Station Delay behavior, proxy, diagnostics, history editor, and WebLoader integration.
+
+Changes
+- Added a bounded five-minute process memory sampler to diagnostics. It records process working set/private bytes, managed heap, cumulative managed allocation, GC collection counts, and process thread/handle counts where available.
+- Retains up to 2,016 samples (approximately seven days) in memory only. The copied diagnostic report includes hourly samples across the retained week plus detailed five-minute samples for the most recent four hours, keeping the report useful without dumping all 2,016 rows.
+- Added conservative WARN detection after at least 60 minutes and 13 samples, then compare against the oldest retained sample (up to seven days): private memory growth of at least 128 MiB and 20%, or managed-heap growth of at least 64 MiB and 25%, measured against the oldest retained sample.
+- No forced garbage collection is performed. Memory history resets when Emby restarts; there is no disk log or accumulating disk usage. Memory statistics are process-wide and shared by Emby and all plugins; a warning identifies a possible growth trend, not definitive proof or attribution of a leak.
+- Bumped plugin package version to 1.7.12 and regenerated the dashboard controller from its source sections.
+
+Validation status
+- Source-level checks and JavaScript syntax checks are run for packaging.
+- This is a source package, not a compiled DLL. The .NET build and live Emby measurement must be performed on the user's Windows/Emby host.

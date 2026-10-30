@@ -1,0 +1,46 @@
+RADIO META v1.3.126 — CLEANUP STEP 16: DIAGNOSTIC SOURCE GROUPING
+=================================================================
+
+Scope
+-----
+The diagnostic-only C# implementation files were moved into
+RadioMeta/Diagnostics. The four dashboard diagnostic source sections were
+moved into WebUI/DashboardSections/Diagnostics, and the dashboard build script
+was updated to read those paths in the same order as before.
+
+This is source organization only. All diagnostics remain compiled, registered,
+served, and visible. No diagnostic code or UI was removed or disabled.
+
+The generated RadioMetaDashboard.js bundle was regenerated from the 15 source
+sections. Its section order and required diagnostic runner marker remain intact.
+
+Known remaining coupling
+------------------------
+Core plugin startup, metadata reader, adaptive routing state, and station
+management still reference diagnostic stores/services directly. This step
+makes the diagnostic implementation easy to locate but does not yet make it
+optional. A later step should add narrow interfaces/no-op implementations and
+explicit Diagnostic/Release build configurations. That work must be separately
+reviewed and regression-tested before any diagnostic code is excluded.
+
+Separate UI correction
+----------------------
+The station action label was changed from Disable station to Delete station,
+including operation reporting and error wording. The existing deletion method,
+file handling, proxy sidecar cleanup, library refresh, and retained station
+metadata rules were not changed.
+
+Validation performed
+--------------------
+- Verified the starting v1.3.125 ZIP against its published SHA-256.
+- Verified the dashboard controller was regenerated from all 15 sections.
+- Parsed the generated dashboard and embedded display JavaScript with Node.js.
+- Confirmed the station mutation implementation differs from the baseline only
+  in the operation label passed to the existing station-operation recorder.
+- Confirmed WebLoader files are retained unchanged.
+
+Validation not performed
+------------------------
+No .NET SDK or Emby assemblies were available in this environment. A Windows
+.NET rebuild and live Emby regression tests remain required. This package is
+source code, not a compiled DLL.

@@ -1,0 +1,53 @@
+        function copyRadioMetaDiagnosticReport() {
+            var report = view.querySelector('#radioDiagnosticsReport');
+            var status = view.querySelector('#radioDiagnosticsStatus');
+            if (!report || !report.textContent) return;
+            var text = report.textContent;
+
+            function fallbackCopy() {
+                var textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.setAttribute('readonly', 'readonly');
+                textarea.style.position = 'fixed';
+                textarea.style.left = '-10000px';
+                textarea.style.top = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                var copied = false;
+                try { copied = document.execCommand('copy'); } catch (_) { copied = false; }
+                textarea.remove();
+                if (status) status.textContent = copied
+                    ? 'Diagnostic report copied. Paste it into your support message.'
+                    : 'Copy was blocked by the browser. Select the report text below and copy it manually.';
+                if (!copied) {
+                    report.focus();
+                    if (window.getSelection && document.createRange) {
+                        var range = document.createRange();
+                        range.selectNodeContents(report);
+                        var selection = window.getSelection();
+                        selection.removeAllRanges();
+                        selection.addRange(range);
+                    }
+                }
+            }
+
+            if (window.navigator && window.navigator.clipboard && typeof window.navigator.clipboard.writeText === 'function') {
+                window.navigator.clipboard.writeText(text).then(function () {
+                    if (status) status.textContent = 'Diagnostic report copied. Paste it into your support message.';
+                }).catch(fallbackCopy);
+            } else fallbackCopy();
+        }
+
+        var diagnosticsRunButton = view.querySelector('#radioDiagnosticsRun');
+        if (diagnosticsRunButton) diagnosticsRunButton.addEventListener('click', runRadioMetaDiagnostics);
+        var diagnosticsCopyButton = view.querySelector('#radioDiagnosticsCopy');
+        if (diagnosticsCopyButton) diagnosticsCopyButton.addEventListener('click', copyRadioMetaDiagnosticReport);
+
+        var stationScanButton = view.querySelector('#radioStationScanButton');
+        if (stationScanButton) {
+            stationScanButton.addEventListener('click', toggleStationFolderVisibility);
+        }
+        updateStationFolderVisibilityButton();
+        var stationCreateButton = view.querySelector('#radioStationCreateButton');
+        if (stationCreateButton) stationCreateButton.addEventListener('click', createStationFile);
+

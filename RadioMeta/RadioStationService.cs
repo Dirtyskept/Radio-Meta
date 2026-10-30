@@ -1,4 +1,4 @@
-﻿
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -26,11 +26,12 @@ public sealed class RadioStationDto
 }
 
 [Route("/RadioMeta/Stations", "GET")]
+[Authenticated(Roles = "Admin")]
 public sealed class GetRadioStations : IReturn<RadioStationsResponse>
 {
 }
 
-[Authenticated]
+[Authenticated(Roles = "Admin")]
 public sealed class RadioStationService : IService
 {
     public object Get(GetRadioStations request)
@@ -78,6 +79,8 @@ public sealed class RadioStationService : IService
 
         var stations = new List<RadioStationDto>();
 
+        long artworkBytesIncluded = 0;
+        const long MaxArtworkBytesPerResponse = 10L * 1024 * 1024;
         foreach (var stationFile in stationFiles)
         {
             var stationName = stationFile.StationName;
@@ -106,15 +109,22 @@ public sealed class RadioStationService : IService
                     ? string.Empty
                     : plugin.CurrentTrackService.CleanSongTitle(stationName, metadata.SongTitle);
 
+            var artworkDataUrl = MakeArtworkDataUrl(
+                metadata.ArtworkPath, MaxArtworkBytesPerResponse - artworkBytesIncluded, out var includedArtworkBytes);
+            artworkBytesIncluded += includedArtworkBytes;
+            var artistForDisplay = currentTrack is not null
+                ? currentTrack.Artist
+                : stationOnly || activeSession
+                    ? string.Empty
+                    : plugin.CurrentTrackService.CleanSongArtist(stationName, metadata.SongTitle, metadata.Artist);
+
             stations.Add(new RadioStationDto
             {
                 StationName = metadata.StationName,
                 StationLine = metadata.StationLine,
-                ArtistLine = currentTrack is not null
-                    ? LimitText(currentTrack.Artist, 26)
-                    : activeSession ? string.Empty : metadata.ArtistLine,
-                SongTitleLine = LimitText(songTitleForDisplay, 26),
-                ArtworkDataUrl = MakeArtworkDataUrl(metadata.ArtworkPath),
+                ArtistLine = RadioMetaValueHelpers.LimitText(artistForDisplay, 26),
+                SongTitleLine = RadioMetaValueHelpers.LimitText(songTitleForDisplay, 26),
+                ArtworkDataUrl = artworkDataUrl,
                 Error = metadata.Error
             });
         }
@@ -128,35 +138,13 @@ public sealed class RadioStationService : IService
         };
     }
 
-    private static string LimitText(string? value, int maxLength)
+    private static string MakeArtworkDataUrl(string artworkPath, long remainingBudgetBytes, out long bytesIncluded)
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return string.Empty;
-        }
-
-        value = value.Trim();
-        if (value.Length <= maxLength)
-        {
-            return value;
-        }
-
-        return maxLength <= 3 ? value[..maxLength] : value[..(maxLength - 3)] + "...";
-    }
-
-    private static string MakeArtworkDataUrl(string artworkPath)
-    {
-        if (string.IsNullOrWhiteSpace(artworkPath) ||
-            !File.Exists(artworkPath))
-        {
-            return string.Empty;
-        }
-
+        bytesIncluded = 0;
+        if (string.IsNullOrWhiteSpace(artworkPath) || !File.Exists(artworkPath)) return string.Empty;
         try
         {
-            var extension = Path.GetExtension(artworkPath)
-                .ToLowerInvariant();
-
+            var extension = Path.GetExtension(artworkPath).ToLowerInvariant();
             var mimeType = extension switch
             {
                 ".jpg" or ".jpeg" => "image/jpeg",
@@ -164,19 +152,15 @@ public sealed class RadioStationService : IService
                 ".webp" => "image/webp",
                 _ => string.Empty
             };
+            if (string.IsNullOrEmpty(mimeType)) return string.Empty;
 
-            if (string.IsNullOrEmpty(mimeType))
-            {
-                return string.Empty;
-            }
-
-            var bytes = File.ReadAllBytes(artworkPath);
-
+            const long MaxArtworkBytesPerFile = 2L * 1024 * 1024;
+            var length = new FileInfo(artworkPath).Length;
+            if (length <= 0 || length > MaxArtworkBytesPerFile || length > remainingBudgetBytes) return string.Empty;
+            if (!RadioStationFileStore.TryReadCappedFile(artworkPath, Math.Min(MaxArtworkBytesPerFile, remainingBudgetBytes), out var bytes)) return string.Empty;
+            bytesIncluded = bytes.LongLength;
             return $"data:{mimeType};base64,{Convert.ToBase64String(bytes)}";
         }
-        catch
-        {
-            return string.Empty;
-        }
+        catch { return string.Empty; }
     }
 }

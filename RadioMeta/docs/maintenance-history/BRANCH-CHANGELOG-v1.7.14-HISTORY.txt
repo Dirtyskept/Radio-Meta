@@ -1,0 +1,30 @@
+Radio Meta v1.7.14 — Persistent Adaptive Routing, Endpoint Backoff, and UI Follow-up
+
+Baseline
+- Built from the v1.7.13 station-switch metadata reinforcement source package.
+- Retains the seven-day process-memory trend diagnostic, the CurrentTracks fallback and Media Session republish attempts, proxy support, Station delay mode, existing parser/validation behavior, and WebLoader installer/restore files.
+
+Persistent adaptive routing
+- Added a bounded `RadioMetaAdaptiveRoutingState.xml` store alongside the plugin configuration. It persists each station's preferred source, consecutive loss/miss counts, current parallel-recheck interval, recheck progress, last completed route outcome, and timestamps.
+- Route preferences survive Emby restarts. XML updates use a temporary file followed by a same-directory replacement. Routine counters are checkpointed rather than writing on every lookup; meaningful state transitions are saved immediately.
+- Successful periodic parallel rechecks widen the recheck schedule from 10 to 20, 40, then 80 eligible uncached lookups after two consecutive confirmations. A failed recheck returns the schedule to 10. An 80-lookup interval remains at 80 until another failure resets it or stable confirmations move it no further than 80.
+- The adaptive route state remains bounded to 512 station entries. Disabling the adaptive-routing switch clears learned source preferences as before, but leaves endpoint health/block records intact.
+
+Persistent Shoutcast endpoint recovery
+- Replaced the old ten-minute in-memory negative cache with independent persisted state for each station's `/stats` and `/7.html` endpoint. The two endpoints have separate histories, so a failed `/stats` does not disable `/7.html`.
+- Transient HTTP/network errors and unusable responses trigger lookup-based retries of 10, 20, 40, and 80 uncached eligible station lookups. After the final level, rechecks continue every 80 eligible lookups until a useful response resets failure history.
+- HTTP 404, 410, and 405 create an automatic unsupported-endpoint block. Recovery is attempted only when both 24 hours and 320 eligible uncached station lookups have elapsed. A successful response removes the automatic entry; a repeated permanent failure restarts the gates.
+- Manual `manualBlock="true"` entries in the `Endpoints` section are never automatically cleared. Remove the entire manual Endpoint element (or set `manualBlock="false"`) while Emby is stopped, then restart Emby to apply the change. The file stores station `.strm` paths and endpoint names, not stream URLs or tokens.
+- The diagnostic now reports route/endpoint state counts, auto/manual blocks, transient backoff entries, recovery-ready endpoints, persistent-state health, and last save time. Diagnostic events explain endpoint skips and retry policy without logging URLs.
+- Endpoint state is bounded; automatic entries are aged out first when the configured limit is exceeded. Manual entries are preserved.
+
+Theme follow-up
+- Added Emby's `raised` class to the inline Radio History editor's Cancel button, fixing the remaining unthemed Cancel button alongside the v1.7.13 station-folder button fixes.
+
+Memory monitor
+- Retains the five-minute, seven-day in-memory process-memory history. It does not force garbage collection and does not create a continuously growing disk log.
+
+Validation status
+- Dashboard JavaScript was regenerated from its canonical source sections and passed `node --check`.
+- Offline regression tests now cover dynamic recheck intervals, source preference persistence across store reload, 10-lookup transient backoff, both gates for permanent-endpoint recovery, and manual blocks after XML reload. The .NET SDK is not available in this environment, so those C# tests and the full plugin build could not be executed here.
+- Package integrity, manifest hashes, WebLoader contents, and source/bundle consistency are checked before delivery. This ZIP is source code, not a compiled DLL; build and perform runtime testing on the Windows/Emby host.

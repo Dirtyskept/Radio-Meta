@@ -1,0 +1,270 @@
+        function setHistoryButtonsDisabled(disabled) {
+            var clearButton = view.querySelector('#radioHistoryClear');
+            var historyContainer = view.querySelector('#radioHistory');
+            if (clearButton) {
+                clearButton.disabled = disabled || !historyContainer || !historyContainer.querySelector('.radio-history-row');
+            }
+            view.querySelectorAll('.radio-history-delete, .radio-history-edit, .radio-history-edit-save, .radio-history-edit-cancel').forEach(function (button) {
+                button.disabled = disabled;
+            });
+        }
+
+        function deleteHistoryEntry(id) {
+            if (historyActionInProgress || !id) {
+                return;
+            }
+            if (activeHistoryEditId) closeHistoryEditor(activeHistoryEditId);
+            if (!window.confirm('Delete this history entry? This cannot be undone.')) {
+                return;
+            }
+
+            historyActionInProgress = true;
+            setHistoryButtonsDisabled(true);
+            var status = view.querySelector('#radioStatus');
+            if (status) {
+                status.textContent = 'Deleting history entry...';
+            }
+
+            ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('RadioMeta/History/Delete'),
+                data: JSON.stringify({ Id: id }),
+                contentType: 'application/json'
+            }).then(function (data) {
+                var error = getValue(data, 'Error', 'error');
+                if (error) {
+                    if (status) status.textContent = error;
+                    return;
+                }
+                if (status) status.textContent = getValue(data, 'Message', 'message') || 'History entry deleted.';
+                historyReloadPending = true;
+            }).catch(function (error) {
+                if (status) {
+                    status.textContent = 'Unable to delete history entry: ' +
+                        (error && error.message ? error.message : String(error));
+                }
+                console.error('Radio Meta history deletion:', error);
+            }).finally(function () {
+                historyActionInProgress = false;
+                setHistoryButtonsDisabled(false);
+                if (historyReloadPending) {
+                    historyReloadPending = false;
+                }
+                loadHistory();
+            });
+        }
+
+        function clearHistory() {
+            if (historyActionInProgress) {
+                return;
+            }
+            if (activeHistoryEditId) closeHistoryEditor(activeHistoryEditId);
+            var container = view.querySelector('#radioHistory');
+            if (!container || !container.querySelector('.radio-history-row')) {
+                return;
+            }
+            if (!window.confirm('Clear ALL Radio Meta history? This permanently deletes every recorded entry and cannot be undone.')) {
+                return;
+            }
+
+            historyActionInProgress = true;
+            setHistoryButtonsDisabled(true);
+            var status = view.querySelector('#radioStatus');
+            if (status) {
+                status.textContent = 'Clearing all radio play history...';
+            }
+
+            ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('RadioMeta/History/Clear'),
+                data: JSON.stringify({}),
+                contentType: 'application/json'
+            }).then(function (data) {
+                var error = getValue(data, 'Error', 'error');
+                if (error) {
+                    if (status) status.textContent = error;
+                    return;
+                }
+                if (status) status.textContent = getValue(data, 'Message', 'message') || 'Radio play history cleared.';
+                historyReloadPending = true;
+            }).catch(function (error) {
+                if (status) {
+                    status.textContent = 'Unable to clear radio play history: ' +
+                        (error && error.message ? error.message : String(error));
+                }
+                console.error('Radio Meta history clear:', error);
+            }).finally(function () {
+                historyActionInProgress = false;
+                setHistoryButtonsDisabled(false);
+                if (historyReloadPending) {
+                    historyReloadPending = false;
+                }
+                loadHistory();
+            });
+        }
+
+        function updateStationFolderShortcut(folder) {
+            var display = view.querySelector('#radioStationFolderDisplay');
+            var shortcut = view.querySelector('#radioStationFolderShortcut');
+            if (!display) return;
+
+            var configuredFolder = String(folder || '').trim();
+            var fullDisplayText = configuredFolder || 'Automatic detection';
+            // Limit the visible folder label to 40 characters, including the ellipsis.
+            var displayText = fullDisplayText.length > 40
+                ? fullDisplayText.slice(0, 39) + '\u2026'
+                : fullDisplayText;
+            display.textContent = displayText;
+            display.title = configuredFolder || 'No Station Folder configured; active audio .strm paths are detected automatically.';
+            if (shortcut) {
+                shortcut.setAttribute('aria-label', configuredFolder
+                    ? 'Configured station folder: ' + configuredFolder
+                    : 'Station folder not configured; automatic detection is enabled');
+            }
+        }
+
+        function focusStationFolderSetting() {
+            var section = view.querySelector('#radioPathSettingsSection');
+            var input = view.querySelector('#radioStationFolder');
+            if (section && typeof section.scrollIntoView === 'function') {
+                section.scrollIntoView({ block: 'center', behavior: 'auto' });
+            }
+            if (input) {
+                input.focus();
+                if (typeof input.select === 'function') input.select();
+            }
+        }
+
+        function loadPathSettings() {
+            var status = view.querySelector('#radioPathSettingsStatus');
+            if (!status || pathSettingsRequestInProgress || pathSettingsSaveInProgress) {
+                return;
+            }
+
+            pathSettingsRequestInProgress = true;
+            status.textContent = 'Loading path settings...';
+            ApiClient.getJSON(ApiClient.getUrl('RadioMeta/PathSettings'))
+                .then(function (data) {
+                    var error = getValue(data, 'Error', 'error');
+                    if (error) {
+                        status.textContent = error;
+                        return;
+                    }
+
+                    var stationFolderInput = view.querySelector('#radioStationFolder');
+                    var ffprobePathInput = view.querySelector('#radioFfprobePath');
+                    var adaptiveRoutingInput = view.querySelector('#radioAdaptiveMetadataRouting');
+                    if (stationFolderInput) {
+                        stationFolderInput.value = String(getValue(data, 'StationFolder', 'stationFolder') || '');
+                    }
+                    updateStationFolderShortcut(getValue(data, 'StationFolder', 'stationFolder'));
+                    if (ffprobePathInput) {
+                        ffprobePathInput.value = String(getValue(data, 'FfprobePath', 'ffprobePath') || '');
+                    }
+                    if (adaptiveRoutingInput) {
+                        // Missing values from an older server default to on for the adaptive-routing release.
+                        adaptiveRoutingInput.checked = getValue(data, 'EnableAdaptiveMetadataRouting', 'enableAdaptiveMetadataRouting') !== false;
+                    }
+
+                    var automatic = !!getValue(data, 'AutomaticStationDetection', 'automaticStationDetection');
+                    var folderAvailable = !!getValue(data, 'StationFolderAvailable', 'stationFolderAvailable');
+                    var ffprobeConfigured = String(getValue(data, 'FfprobePath', 'ffprobePath') || '').trim().length > 0;
+                    var ffprobeAvailable = !!getValue(data, 'FfprobeAvailable', 'ffprobeAvailable');
+                    var messages = [];
+
+                    if (automatic) {
+                        messages.push('Automatic station detection is enabled.');
+                    } else if (folderAvailable) {
+                        messages.push('Station folder found.');
+                    } else {
+                        messages.push('Station folder not found. Check the path or leave it blank for automatic detection.');
+                    }
+
+                    if (ffprobeAvailable) {
+                        messages.push('FFprobe found.');
+                    } else if (ffprobeConfigured) {
+                        messages.push('FFprobe was not found at that path. Check it or leave blank to search PATH.');
+                    } else {
+                        messages.push('FFprobe path is blank; searching Windows PATH.');
+                    }
+
+                    status.textContent = messages.join(' ');
+                })
+                .catch(function (error) {
+                    status.textContent = 'Unable to load path settings. Please check the connection and retry.';
+                    updateStationFolderShortcut('');
+                    var shortcutDisplay = view.querySelector('#radioStationFolderDisplay');
+                    if (shortcutDisplay) {
+                        shortcutDisplay.textContent = 'Unable to load';
+                        shortcutDisplay.title = error && error.message ? error.message : String(error);
+                    }
+                    console.error('Radio Meta path settings load:', error);
+                })
+                .finally(function () {
+                    pathSettingsRequestInProgress = false;
+                });
+        }
+
+        function savePathSettings() {
+            var status = view.querySelector('#radioPathSettingsStatus');
+            var saveButton = view.querySelector('#radioPathSettingsSave');
+            var stationFolderInput = view.querySelector('#radioStationFolder');
+            var ffprobePathInput = view.querySelector('#radioFfprobePath');
+            var adaptiveRoutingInput = view.querySelector('#radioAdaptiveMetadataRouting');
+            if (!status || !stationFolderInput || !ffprobePathInput || !adaptiveRoutingInput || pathSettingsSaveInProgress) {
+                return;
+            }
+
+            var stationFolder = stationFolderInput.value.trim();
+            var ffprobePath = ffprobePathInput.value.trim();
+            if (stationFolder.length > 1024 || ffprobePath.length > 1024) {
+                status.textContent = 'Paths must be 1024 characters or fewer.';
+                return;
+            }
+
+            pathSettingsSaveInProgress = true;
+            if (saveButton) {
+                saveButton.disabled = true;
+            }
+            stationFolderInput.disabled = true;
+            ffprobePathInput.disabled = true;
+            adaptiveRoutingInput.disabled = true;
+            status.textContent = 'Saving path settings to the plugin XML...';
+
+            ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('RadioMeta/PathSettings'),
+                data: JSON.stringify({
+                    StationFolder: stationFolder,
+                    FfprobePath: ffprobePath,
+                    EnableAdaptiveMetadataRouting: adaptiveRoutingInput.checked
+                }),
+                contentType: 'application/json'
+            }).then(function (data) {
+                var error = getValue(data, 'Error', 'error');
+                if (error) {
+                    status.textContent = error;
+                    return;
+                }
+
+                stationFolderInput.value = String(getValue(data, 'StationFolder', 'stationFolder') || '');
+                ffprobePathInput.value = String(getValue(data, 'FfprobePath', 'ffprobePath') || '');
+                adaptiveRoutingInput.checked = getValue(data, 'EnableAdaptiveMetadataRouting', 'enableAdaptiveMetadataRouting') !== false;
+                updateStationFolderShortcut(stationFolderInput.value);
+                var message = String(getValue(data, 'Message', 'message') || 'Path settings saved to the plugin XML.');
+                status.textContent = message + ' Routing changes apply to the next metadata lookup; station-folder changes apply on the next playback progress update.';
+            }).catch(function (error) {
+                status.textContent = 'Unable to save path settings: ' +
+                    (error && error.message ? error.message : String(error));
+                console.error('Radio Meta path settings save:', error);
+            }).finally(function () {
+                pathSettingsSaveInProgress = false;
+                if (saveButton) {
+                    saveButton.disabled = false;
+                }
+                stationFolderInput.disabled = false;
+                ffprobePathInput.disabled = false;
+                adaptiveRoutingInput.disabled = false;
+            });
+        }
+

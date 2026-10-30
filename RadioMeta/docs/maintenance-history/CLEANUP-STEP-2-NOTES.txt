@@ -1,0 +1,40 @@
+RADIO META v1.3.99 — CLEANUP STEP 2
+==================================
+
+This is the first conservative cleanup pass. It deliberately avoids changing
+metadata parsing rules, playback/display decisions, network request behavior,
+station file format, proxy protocol, or WebLoader files.
+
+Changes
+-------
+1. Removed an unused internal artwork-reading overload. The overload had no
+   callers; the budget-aware method used by the station scan remains unchanged.
+2. Removed a proxy-sidecar exception helper that did nothing. Its catch still
+   intentionally fails closed and does not log sidecar paths, upstream URLs, or
+   token information.
+3. Removed outdated "experimental" wording from user-facing proxy status/error
+   messages and the station-created confirmation. The proxy behavior itself is
+   unchanged; the unrelated stream-capture paste/import experiment remains as-is.
+4. Regenerated RadioMetaDashboard.js from the same 15 ordered source sections so
+   the embedded dashboard bundle matches its maintainable source files.
+5. Advanced the project version to 1.3.99. No plugin GUID/config identity changes.
+
+Not changed
+-----------
+- No metadata parsing or track-update logic.
+- No station creation/edit/delete or library-refresh logic.
+- No proxy networking, FFmpeg arguments, token format or sidecar format.
+- No display helper logic.
+- No WebLoader file, including nowplayingbar.js or NOWPLAYINGBAR-CHANGES.txt.
+- No minification.
+
+Tests/checks in this environment
+--------------------------------
+- Input v1.3.98 SHA256 manifest validated before copying.
+- Dashboard bundle regenerated from all 15 source sections in documented order.
+- Dashboard required-marker checks pass.
+- Stale proxy wording checks pass for the changed C# and dashboard files.
+- Source package manifest and ZIP checksum were regenerated and independently
+  validated after packaging.
+- C# build/live Emby test not run: this environment has no dotnet executable or
+  target Emby assembly directory. Please build and smoke-test on Windows.

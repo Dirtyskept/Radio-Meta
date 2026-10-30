@@ -12,9 +12,12 @@ public sealed class RadioMetaPerformanceSampleDto
     public string Operation { get; set; } = string.Empty;
     public double DurationMs { get; set; }
     public double? ShoutcastDurationMs { get; set; }
+    public bool ShoutcastAttempted { get; set; }
+    public bool ShoutcastCancelled { get; set; }
     public double? IcyDurationMs { get; set; }
     public int IcyIntervalsAttempted { get; set; }
     public bool IcyAttempted { get; set; }
+    public bool IcyCancelled { get; set; }
     public bool CacheHit { get; set; }
     public bool ProcessStarted { get; set; }
     public string Outcome { get; set; } = string.Empty;
@@ -61,7 +64,10 @@ public sealed class RadioMetaPerformanceMetricsStore
         bool icyAttempted,
         bool cacheHit,
         string? outcome,
-        string? resultSource)
+        string? resultSource,
+        bool shoutcastAttempted = true,
+        bool shoutcastCancelled = false,
+        bool icyCancelled = false)
     {
         Add(new RadioMetaPerformanceSampleDto
         {
@@ -69,10 +75,13 @@ public sealed class RadioMetaPerformanceMetricsStore
             StationName = SafeStation(stationName),
             Operation = "Network lookup",
             DurationMs = RoundMs(durationMs),
-            ShoutcastDurationMs = RoundMs(shoutcastDurationMs),
+            ShoutcastDurationMs = shoutcastAttempted ? RoundMs(shoutcastDurationMs) : null,
+            ShoutcastAttempted = shoutcastAttempted,
+            ShoutcastCancelled = shoutcastAttempted && shoutcastCancelled,
             IcyDurationMs = icyAttempted && icyDurationMs.HasValue ? RoundMs(icyDurationMs.Value) : null,
             IcyIntervalsAttempted = Math.Clamp(icyIntervalsAttempted, 0, RadioMetadataReader.DirectIcyMaxIntervals),
             IcyAttempted = icyAttempted,
+            IcyCancelled = icyAttempted && icyCancelled,
             CacheHit = cacheHit,
             Outcome = SafeLabel(outcome),
             ResultSource = SafeLabel(resultSource)
@@ -100,7 +109,8 @@ public sealed class RadioMetaPerformanceMetricsStore
             var samples = _samples.ToArray();
             var network = samples.Where(s => s.Operation == "Network lookup").ToArray();
             var uncachedNetwork = network.Where(s => !s.CacheHit).ToArray();
-            var icy = network.Where(s => s.IcyAttempted && s.IcyDurationMs.HasValue).ToArray();
+            var icyAttempts = network.Where(s => s.IcyAttempted && s.IcyDurationMs.HasValue).ToArray();
+            var icyCompleted = icyAttempts.Where(s => !s.IcyCancelled).ToArray();
             var ffprobe = samples.Where(s => s.Operation == "FFprobe process").ToArray();
             var startedFfprobe = ffprobe.Where(s => s.ProcessStarted).ToArray();
 
@@ -112,9 +122,9 @@ public sealed class RadioMetaPerformanceMetricsStore
                 NetworkCacheHitCount = network.Count(s => s.CacheHit),
                 AverageNetworkLookupMs = Average(uncachedNetwork.Select(s => s.DurationMs)),
                 MaxNetworkLookupMs = Maximum(uncachedNetwork.Select(s => s.DurationMs)),
-                DirectIcyReadCount = icy.Length,
-                AverageIcyDurationMs = Average(icy.Select(s => s.IcyDurationMs!.Value)),
-                AverageIcyIntervalsAttempted = Average(icy.Select(s => (double)s.IcyIntervalsAttempted)),
+                DirectIcyReadCount = icyAttempts.Length,
+                AverageIcyDurationMs = Average(icyCompleted.Select(s => s.IcyDurationMs!.Value)),
+                AverageIcyIntervalsAttempted = Average(icyCompleted.Select(s => (double)s.IcyIntervalsAttempted)),
                 FfprobeAttemptCount = ffprobe.Length,
                 FfprobeStartedCount = startedFfprobe.Length,
                 FfprobeNonSuccessCount = ffprobe.Count(s => !string.Equals(s.Outcome, "success", StringComparison.OrdinalIgnoreCase)),
@@ -144,9 +154,12 @@ public sealed class RadioMetaPerformanceMetricsStore
         Operation = sample.Operation,
         DurationMs = sample.DurationMs,
         ShoutcastDurationMs = sample.ShoutcastDurationMs,
+        ShoutcastAttempted = sample.ShoutcastAttempted,
+        ShoutcastCancelled = sample.ShoutcastCancelled,
         IcyDurationMs = sample.IcyDurationMs,
         IcyIntervalsAttempted = sample.IcyIntervalsAttempted,
         IcyAttempted = sample.IcyAttempted,
+        IcyCancelled = sample.IcyCancelled,
         CacheHit = sample.CacheHit,
         ProcessStarted = sample.ProcessStarted,
         Outcome = sample.Outcome,

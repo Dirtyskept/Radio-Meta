@@ -1,0 +1,34 @@
+Experimental feature: Stream Capture paste import
+==================================================
+
+This v1.3.97 build adds a reversible experimental feature to the existing
+Station name field in the Radio Meta dashboard. When a user pastes a valid
+JSON payload whose schema is "radiometa-add-station-capture" and whose
+schemaVersion is 1, the paste handler fills the Station name, Stream URL, and
+Station logo URL fields. It recognizes stationArtworkUrl (the current
+Stream Capture Add Data field), stationArtwork.url, and several legacy aliases.
+
+Safety behavior
+---------------
+- Ordinary station-name pastes are not intercepted.
+- A JSON payload with another schema is not intercepted.
+- Unsupported capture schema versions are reported without altering the form.
+- The import does not create station files and does not start a metadata test.
+- Missing stream/artwork fields clear those fields to avoid accidental reuse of
+  a previous station's URL; the status line explains what was missing.
+- Only absolute HTTP/HTTPS URLs are accepted into the URL fields.
+- This feature does not add a new API, change the backend, or modify WebLoader.
+
+Rollback
+--------
+The feature is isolated in:
+  RadioMeta/WebUI/DashboardSections/14-Current-Station-Form-And-Controller-Wiring.js.part
+
+It is marked with the comment:
+  EXPERIMENTAL: Paste-import for Radio Meta Stream Capture JSON.
+
+To abandon the experiment, restore that section from the v1.3.96 source, set
+RadioMeta.csproj and DashboardSections/00-Amd-Shell-And-Helper-Bootstrap.js.part
+back to 1.3.96, then rebuild so RadioMetaDashboard.js is regenerated. No C# API,
+configuration, station-file, playback, display-helper, or WebLoader changes
+need to be reverted.

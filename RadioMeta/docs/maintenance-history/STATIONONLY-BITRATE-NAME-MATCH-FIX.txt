@@ -1,0 +1,32 @@
+RADIO META v1.3.106 — STATIONONLY BITRATE-NAME MATCH FIX
+
+What happened
+The diagnostic report showed the detected station as "OZFM", but the saved no-metadata rule was named "OZFM - 96k". Because the old matching logic required an exact name, Radio Meta chose Automatic mode and still tried Shoutcast, ICY, and FFprobe. That is contrary to the purpose of the StationOnly setting.
+
+What changed
+- StationOnly still prefers exact name matches.
+- If an exact match is absent, Radio Meta also recognizes a narrow set of standard bitrate suffixes at the end of a station rule name: for example 96k, 128k, 192k, 320k, 96kbps, or 96 kb/s, optionally in parentheses and separated by a dash.
+- The relaxed matching applies only to StationOnly rules. Automatic and Carplay keep their existing exact station-name matching.
+- Existing device restrictions are preserved.
+- The diagnostic reports the matched rule name and says when the bitrate suffix was ignored. If it still reports Automatic while the StationOnly rule is configured, that is a genuine problem to investigate.
+
+Expected OZFM result
+The diagnostic should say StationOnly is active for current station "OZFM", matched rule "OZFM - 96k", and metadata lookup is intentionally disabled. There should be no new Shoutcast, ICY, or FFprobe lookup activity for OZFM while that rule applies. Empty accepted-track cache and missing RadioMeta song/artist fields are expected.
+
+What is unchanged
+- No display transition behavior was changed in this build. This release focuses on the rule-match defect revealed by the v1.3.105 diagnostic.
+- Metadata capture timeouts and ICY interval limits are unchanged.
+- Proxy, station files, library refresh, history, title parsing, and WebLoader are unchanged.
+- WebLoader files, including NOWPLAYINGBAR-CHANGES.txt, remain unchanged. No stock Emby file changes were made.
+- No minification.
+
+Testing
+1. Build and install on Windows against the installed Emby assemblies.
+2. Play OZFM.
+3. Run diagnostics while the player is active. Confirm the mode is StationOnly, the matched rule is "OZFM - 96k", and the message confirms lookup is disabled.
+4. Verify recent reader events do not show new metadata lookups for OZFM after the StationOnly skip.
+5. Switch to a metadata-enabled station and confirm its song/artist still update normally.
+6. Confirm a StationOnly rule for another station with a bitrate suffix also matches its shorter detected station name.
+
+Verification limitation
+The source change is statically checked in this environment, but C# compilation and live Emby behavior must be verified on the Windows server.

@@ -1,0 +1,33 @@
+RADIO META v1.3.105 — METADATA-FREE STATION FALLBACK AND STATIONONLY ENFORCEMENT
+
+Why this change
+OZFM has music but no usable song/artist metadata and is configured in StationOnly mode. StationOnly explicitly means do not inspect the item's song metadata, do not make HTTP/ICY metadata requests, and do not launch FFprobe for track metadata. The player should show the selected station title rather than the prior station's song/artist. The diagnostic must also say clearly when metadata lookup is intentionally disabled, instead of warning that metadata is missing.
+
+Changes
+- Ignores a carried-over RadioMetaStation ProviderId when it contradicts both the selected .strm filename and the current item's visible name, so a previous station cannot trigger the wrong StationOnly rule during a handoff.
+- Recognizes eligible untimed live audio stream items without requiring RadioMetaSong/Artist ProviderIds. Ordinary finite-duration music tracks are excluded from this fallback.
+- When Emby omits a .strm path during a handoff and old RadioMetaStation ProviderIds disagree with the newly visible item title, uses that new item identity to start a transition and reject the old song instead of treating the old station as still active.
+- Clears only Radio Meta/legacy session ProviderIds from the newly selected station item on a station change; native Emby title/artwork fields are not changed. Cleanup shares the session lock used by metadata publication.
+- Preserves the pending station title through brief Emby session gaps.
+- Keeps the large-player station override while NowPlayingItem is temporarily absent.
+- When a known radio session temporarily lacks NowPlayingItem but the visible Emby player title changes, uses that newly rendered title as a temporary station identity rather than repainting old metadata.
+- Adds fallback source and polling status to the diagnostic report to make future failures easier to distinguish.
+- Resolves StationOnly against the .strm filename, Emby item title, and RadioMetaStation ProviderId associated with the selected .strm item; it does not use a stale title/ProviderId from a different candidate item. Device-targeted legacy rules still respect their saved device restriction.
+- Performs StationOnly policy resolution even while Emby briefly has no hydrated NowPlayingItem, so it does not start a new metadata lookup during that gap.
+- Diagnostics resolves the current mode using the active session's .strm basename and current device scope, then shows the identities it used without exposing full paths or session IDs.
+- Emits a bounded diagnostic event stating "StationOnly rule matched; metadata lookups intentionally disabled" rather than treating this as a metadata failure.
+- Adds a Current station metadata policy section to diagnostics, including the current effective mode, matching saved rule, and configured StationOnly rule names.
+- Suppresses expected empty-cache / absent-provider-ID warnings for StationOnly stations, while warning if a same-named StationOnly rule is saved but not being applied or new metadata-reader activity appears after the skip.
+
+Preserved
+- Live Shoutcast/ICY timeout and ICY interval limits are unchanged.
+- Shoutcast negative caching is unchanged.
+- Live metadata timeouts and ICY interval limits are unchanged.
+- Proxy, station file handling, library refresh, metadata parsing/publishing, history, title correction rules, plugin identity, settings identity and WebLoader payload are not intentionally changed.
+- No minification was performed.
+
+Testing requested
+Build on the Windows Emby host. Confirm OZFM's StationOnly rule is saved. Switch from a metadata-producing station to OZFM. The old song/artist should disappear, OZFM's station title should remain, and there should be no new Shoutcast/ICY/FFprobe track-metadata attempts for OZFM. Switch back to a metadata-producing station and confirm its song/artist returns. Repeat several rapid station switches and verify ordinary non-radio music presentation is unchanged. Run diagnostics while the browser player is actively playing and check helper version 1.3.105, Current station metadata policy, StationOnly lookup enforcement, transition fallback count/source, and last poll status. If diagnostics says Automatic rather than StationOnly for OZFM, note the displayed detected name and configured rule names; this means the rule identity isn't matching and should not be treated as an expected no-metadata result.
+
+Verification limit
+JavaScript syntax and bundle consistency can be checked from this environment. C# compilation and live Emby player behavior must be tested on the Windows server.

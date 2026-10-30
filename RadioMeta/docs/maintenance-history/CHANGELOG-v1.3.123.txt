@@ -1,0 +1,16 @@
+Radio Meta v1.3.123 — History Edit Button Fix
+
+BASELINE
+- Based on v1.3.122 / the v1.3.117 dashboard event-wiring baseline, including the compact artist/title correction editor.
+
+FIX
+- Corrected the shared dashboard addText helper to return the DOM element it creates.
+- The artist editor had called addText(...) and then immediately assigned .style on the returned value for the “Artist found” and “Title found” labels. Because addText did not return the element, opening the Edit button threw a TypeError before the inline editor could be inserted.
+- The shared helper now returns the newly appended element. Existing callers that ignore the return value remain unchanged.
+- No new click handler was added; the original delegated edit-button handler remains intact.
+- Updated project and dashboard version to 1.3.123.
+
+VALIDATION
+- Regenerated RadioMetaDashboard.js from all 15 dashboard source sections in the same order as Build-DashboardController.ps1.
+- Static checks verify the helper returns the element and both editor-label style assignments now receive valid elements.
+- JavaScript syntax check and ZIP integrity check are included in packaging validation. A Windows .NET build and live Emby test still need to be run in the target environment.

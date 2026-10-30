@@ -1,0 +1,22 @@
+Radio Meta v1.7.13 — Station-Switch Metadata Reinforcement + Theme Button Fixes
+
+Baseline
+- Based on the v1.7.12 experimental source package.
+- Retains adaptive metadata routing, Station delay mode, proxy support, bounded memory-trend diagnostics, history editing, and required WebLoader installer/restore files.
+
+Station-switch metadata reinforcement
+- When the selected radio session item has no usable song/artist fields, the browser helper can query the authenticated Radio Meta CurrentTracks endpoint for the exact active Emby session.
+- The recovery record must have a complete song and artist and match the selected station. Station identity is checked before a record is accepted. A short-lived guard prevents stale Emby session-item fields from overwriting the server-canonical track after recovery.
+- CurrentTracks requests are limited to fallback situations, use a 3.5-second timeout, and back off after repeated misses. Normal valid session-item updates do not trigger the extra request.
+- Once a valid track is accepted after a station switch, the helper republishes Media Session metadata using fresh MediaMetadata objects at 250, 700, 1,500, and 3,000 ms. Retries are cancelled logically when another station/track supersedes the accepted tuple. Existing artwork is retained.
+- Added diagnostic details for CurrentTracks fallback results and successful station-switch Media Session republications. No server-side reader, parser, cache policy, or audio connection was changed by this patch.
+
+Theme-aware station settings buttons
+- Added Emby's raised-button class to the station-folder Change button and the dynamic Cancel button, so theme styling applies instead of the unstyled default appearance.
+- Added raised + button-delete classes to Delete station, preserving Emby's theme-aware destructive-action style.
+- Save changes retains its existing raised/button-submit classes.
+
+Validation status
+- Regenerated RadioMetaIntegratedDisplay.js from its canonical DisplayModules and RadioMetaDashboard.js from source sections.
+- JavaScript syntax, bundled/source consistency, required WebLoader files, package ZIP integrity, and SHA-256 checks were checked in this environment.
+- This is source code, not a compiled DLL. The .NET rebuild and station-switch test must be performed on the Windows/Emby host, including a locked-iPhone/CarPlay test. The change is a targeted reinforcement and is not yet confirmed to solve every iOS background-state case.

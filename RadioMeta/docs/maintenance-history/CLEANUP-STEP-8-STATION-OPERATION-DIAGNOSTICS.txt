@@ -1,0 +1,45 @@
+RADIO META v1.3.109 — STATION-FILE OPERATION DIAGNOSTICS
+========================================================
+
+Purpose
+-------
+Add visibility into station file operations so a future report can show what happened after Create, Edit/Rename, Delete, or proxy enable/disable. Previously the diagnostics could show that the APIs existed, but did not have a per-operation record proving whether a specific station file changed or whether the follow-up refresh was accepted.
+
+What is tracked
+---------------
+- Operation: Create station, Edit/rename station, Delete station, Enable proxy, or Disable proxy.
+- Station display name and UTC time.
+- Whether the server confirmed the file change, or whether the dashboard could not confirm the outcome.
+- Whether the proxy sidecar was valid, removed, not used, or needs checking.
+- Whether Emby accepted the targeted library-refresh request.
+- Whether Radio Meta successfully refreshed its own station list afterward.
+- Dashboard-reported failures and incomplete/unconfirmed outcomes.
+
+How it works
+------------
+The server records successful file operations and returns a random operation correlation ID. The dashboard reports the refresh outcome using that ID. The operation history is exposed through the existing admin-only diagnostics health endpoint. The result-report endpoint is also administrator-only and accepts only known status values; it does not accept raw URLs, file paths, Emby IDs, credentials, proxy tokens, or free-form error details.
+
+The station-list scan status is distinct from the library refresh status. "Accepted by Emby" means the refresh request was accepted; it does not mean Emby's background scan has finished. The station-list scan status says whether Radio Meta's own station-list scan completed afterward.
+
+Storage and privacy
+-------------------
+- Retains at most 30 recent records in memory; records reset when Emby/Radio Meta restarts.
+- Stores only a sanitized station display name, operation, result codes, timestamp and fixed diagnostic wording.
+- Does not store the .strm path, stream URL, proxy token, artwork URL, library item ID, device ID, or session ID.
+- Failed dashboard requests are recorded as "outcome unconfirmed" rather than assuming that no files changed; some failures can occur after a partial file change.
+- Diagnostic history is not a permanent audit log. Use normal backups and file-level checks for durable records.
+
+Test checklist
+--------------
+1. Build the source on Windows against the installed Emby assemblies.
+2. Create a disposable direct station. Verify the file appears in the scan list and the diagnostic shows Create station, file=success, sidecar=not used, plus library/list refresh outcomes.
+3. Edit/rename that station. Verify the renamed file appears and the report records Edit/rename station.
+4. If safe to do so, enable and disable proxy on a disposable HTTP(S) station. Verify the report shows sidecar validity on enable and removal on disable.
+5. Delete the disposable station. Verify it disappears and the report records Delete station.
+6. Inspect a failed/inconclusive operation only if one naturally occurs; do not deliberately damage a real station or sidecar to test failure logging.
+7. Confirm the report does not include file paths, upstream URLs or tokens.
+8. Confirm metadata parsing, station transition behavior, StationOnly (OZFM), proxy playback, and the WebLoader remain unchanged.
+
+Build / verification limits
+---------------------------
+JavaScript syntax and generated dashboard bundle consistency were checked in this environment. Source archive and SHA256 manifest integrity were checked. C# compilation and live Emby runtime behavior could not be verified here because the .NET SDK and Emby build assemblies are unavailable. Do not replace the known-good v1.3.98 backup until the Windows build and targeted tests pass.

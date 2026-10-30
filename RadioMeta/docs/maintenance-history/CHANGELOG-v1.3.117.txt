@@ -1,0 +1,9 @@
+Radio Meta v1.3.117 — Offline Metadata Regression Harness
+
+- Added a standalone .NET 8 offline regression harness under Tests/.
+- The harness links the same parser/helper source files used by the plugin; it does not duplicate parsing logic.
+- Separated ICY StreamTitle field extraction into RadioIcyStreamTitleParser.cs, a pure helper used by the live reader and harness.
+- Added regression cases for apostrophes in single/double-quoted ICY values, malformed quotes, unquoted values, HTML entities, spacing-acute normalization, title splitting, FFprobe JSON tag lookup, blank titles, and URL rejection.
+- Added an informational manual-review case for ambiguous multi-part station metadata.
+- No new live API, network behavior, station-setting changes, or Emby dependency was introduced.
+- WebLoader implementation unchanged.

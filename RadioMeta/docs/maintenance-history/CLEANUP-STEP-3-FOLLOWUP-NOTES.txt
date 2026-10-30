@@ -1,0 +1,38 @@
+RADIO META v1.3.101 — CLEANUP FOLLOW-UP: DIAGNOSTIC VERSION CHECK
+====================================================================
+
+Why this update was needed
+-------------------------
+The live v1.3.100 report showed:
+  Dashboard controller version: 1.3.100
+  Plugin/assembly version:       1.3.100.0
+
+These identify the same release. The diagnostic compared the strings exactly,
+so it incorrectly warned that the dashboard bundle might be stale.
+
+What changed
+------------
+- The diagnostic now treats a three-part version such as 1.3.101 and the same
+  four-part assembly version ending in .0 (1.3.101.0) as equivalent.
+- The dashboard controller and project version are both updated to 1.3.101.
+- The embedded dashboard bundle was regenerated from the 15 readable source
+  sections. The source section and generated bundle must remain in sync.
+
+What did not change
+-------------------
+- No C# metadata-reading logic or stream request behavior changed.
+- No proxy, station-file, security, or library-refresh behavior changed.
+- No minification was performed.
+- WebLoader files and the stock nowplayingbar.js payload are unchanged.
+
+Next testing checkpoint
+-----------------------
+Build the source using the usual Windows/Emby build command. Rerun diagnostics.
+The version alignment result should be PASS. Normal metadata playback should
+continue to work. The report's slow Shoutcast 404 fallbacks are recorded as a
+separate performance improvement candidate; they were intentionally not changed
+in this small follow-up so that only one behavior is changed at a time.
+
+Static validation performed in this environment: dashboard source/bundle
+consistency, JavaScript syntax where available, and package/checksum integrity.
+C# compilation and live Emby testing were not performed here.

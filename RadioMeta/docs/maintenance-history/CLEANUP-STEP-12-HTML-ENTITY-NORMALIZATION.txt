@@ -1,0 +1,39 @@
+RADIO META v1.3.113 — HTML ENTITY NORMALIZATION
+================================================
+
+Purpose
+-------
+Fix encoded punctuation and other HTML entities in station metadata through the existing shared title-parsing path, while preserving the current metadata lookup schedule.
+
+Changes
+-------
+- Added one shared HTML-text normalization helper using .NET WebUtility.HtmlDecode.
+- Updated RadioStreamTitleParser to split the normalized title rather than validating a decoded temporary and then splitting the original encoded input.
+- Applied the shared normalizer to Shoutcast JSON, the legacy Shoutcast endpoint's extracted title, direct ICY title text, and FFprobe's StreamTitle tag.
+- Updated saved title correction matching to normalize incoming text and saved OriginalTitle values; CorrectedTitle output is normalized too. Existing rules can match either encoded or decoded apostrophe/ampersand forms.
+- Updated plugin/dashboard version marker to 1.3.113 and regenerated the dashboard bundle from the same 15 source sections.
+
+Expected results
+----------------
+- `Hold on, we&#039;re going home` displays as `Hold on, we're going home`.
+- `Don&#039;t Stand So Close to Me/Young Girl` displays with a normal apostrophe and preserves the slash and rest of the title.
+- `Gesaffelstein &amp; Pharrell Williams` displays as `Gesaffelstein & Pharrell Williams`.
+- Common numeric apostrophe entities such as `&#39;` and `&#x27;`, and the named `&apos;` entity, are handled by the same decoder rather than station-specific rules.
+- No extra website request, metadata polling, sleep, timeout, or ICY interval is introduced. HTML decoding is a local string operation.
+
+Intentionally unchanged
+-----------------------
+- Station changes, station cache/transition logic, network fallback order, network cache lifetimes, Shoutcast negative-cache behavior, live timeout limits, and direct ICY interval limits.
+- Player display code, dashboard behavior other than version marker, proxy code, station file management, StationOnly behavior, plugin GUID, and configuration XML filename.
+- WebLoader files; they were not modified.
+- No minification or .NET trimming.
+
+Verification performed in the authoring environment
+--------------------------------------------------
+- Reviewed the modified C# paths for consistent use of the shared normalizer and existing separator-selection logic.
+- Rebuilt the dashboard bundle from all 15 source sections and checked its required controller markers/version.
+- JavaScript syntax checks and ZIP/source-manifest integrity checks are to be run on the completed package.
+
+Limitations
+-----------
+The authoring environment does not have the .NET SDK or Emby assemblies available, so this was not compiled and was not run against live playback here. Build it on Windows and use the README checklist before installing it as the active plugin.

@@ -1,0 +1,506 @@
+        function updateHistoryVisibilityButton() {
+            // The left-hand history button is the single show/hide control.
+            var button = view.querySelector('#radioHistoryScan');
+            if (!button) return;
+            var label = button.querySelector('span');
+            if (label) label.textContent = historyPanelVisible ? 'Hide History' : 'Show History';
+            button.setAttribute('aria-expanded', historyPanelVisible ? 'true' : 'false');
+        }
+
+        function toggleHistoryVisibility() {
+            var panel = view.querySelector('#radioHistoryPanel');
+            if (!panel) return;
+
+            if (historyPanelVisible) {
+                historyPanelVisible = false;
+                panel.style.display = 'none';
+                updateHistoryVisibilityButton();
+                return;
+            }
+
+            historyPanelVisible = true;
+            panel.style.display = '';
+            updateHistoryVisibilityButton();
+            // Showing history requests the saved entries; there is no separate
+            // Refresh button. Hiding the panel never deletes or alters entries.
+            loadHistory();
+        }
+
+        function loadHistory() {
+            if (!historyPanelVisible) return;
+            var status = view.querySelector('#radioStatus');
+            var container = view.querySelector('#radioHistory');
+
+            if (!status || !container) {
+                return;
+            }
+            // Keep the row editor and its draft stable while the user is editing.
+            if (activeHistoryEditId) {
+                return;
+            }
+            if (requestInProgress) {
+                historyReloadPending = true;
+                return;
+            }
+
+            requestInProgress = true;
+            if (!hasLoadedOnce) {
+                status.textContent = 'Loading played-item history...';
+            }
+
+            ApiClient.getJSON(ApiClient.getUrl('RadioMeta/History'))
+                .then(function (data) {
+                    var error = getValue(data, 'Error', 'error');
+                    if (error) {
+                        status.textContent = error;
+                        return;
+                    }
+
+                    var items = getValue(data, 'Items', 'items') || [];
+                    historyItems = items;
+                    var configuredLimit = Number(getValue(data, 'Limit', 'limit')) || 200;
+                    container.replaceChildren();
+                    var clearButton = view.querySelector('#radioHistoryClear');
+                    if (clearButton) {
+                        clearButton.disabled = !items.length || historyActionInProgress;
+                    }
+
+                    if (!items.length) {
+                        status.textContent = 'No songs have been recorded yet. Play a radio station; newly detected songs will appear here.';
+                        hasLoadedOnce = true;
+                        return;
+                    }
+
+                    var table = document.createElement('table');
+                    table.className = 'radio-history-table';
+                    table.setAttribute('aria-label', 'Radio history');
+
+                    var thead = document.createElement('thead');
+                    var headerRow = document.createElement('tr');
+                    ['#', 'Station', 'Song Title', 'Artist', 'Date/Time', 'Actions'].forEach(function (label) {
+                        var th = document.createElement('th');
+                        th.scope = 'col';
+                        th.textContent = label;
+                        headerRow.appendChild(th);
+                    });
+                    thead.appendChild(headerRow);
+                    table.appendChild(thead);
+
+                    var tbody = document.createElement('tbody');
+                    items.forEach(function (item, itemIndex) {
+                        var row = document.createElement('tr');
+                        row.className = 'radio-history-row' + (itemIndex % 2 === 1 ? ' radio-history-row-alternate' : '');
+
+                        var artist = getValue(item, 'Artist', 'artist');
+                        var songTitle = getValue(item, 'SongTitle', 'songTitle');
+                        var stationName = getValue(item, 'StationName', 'stationName');
+                        var playedAt = getValue(item, 'PlayedAt', 'playedAt');
+                        var id = String(getValue(item, 'Id', 'id') || '');
+                        row.setAttribute('data-history-row-id', id);
+                        row.setAttribute('data-current-title', songTitle || '');
+
+                        addText(row, 'radio-history-number', String(itemIndex + 1), 'td');
+                        addText(row, 'radio-history-station', stationName || '—', 'td');
+                        addText(row, 'radio-history-song', songTitle || (artist ? 'Unknown title' : 'Unknown track'), 'td');
+                        addText(row, 'radio-history-artist', artist || '—', 'td');
+                        addText(row, 'radio-history-played-at', formatPlayedAt(playedAt) || '—', 'td');
+
+                        var actions = document.createElement('td');
+                        actions.className = 'radio-history-actions';
+                        if (id) {
+                            var editButton = document.createElement('button');
+                            editButton.type = 'button';
+                            editButton.className = 'emby-button raised radio-history-edit';
+                            editButton.setAttribute('data-history-edit-id', id);
+                            editButton.setAttribute('aria-label', 'Edit title for ' + (songTitle || 'Unknown track'));
+                            editButton.setAttribute('title', 'Edit title');
+                            editButton.disabled = historyActionInProgress;
+                            makePencilIcon(editButton);
+                            actions.appendChild(editButton);
+
+                            var deleteButton = document.createElement('button');
+                            deleteButton.type = 'button';
+                            deleteButton.className = 'emby-button raised button-delete radio-history-delete';
+                            deleteButton.setAttribute('data-history-delete-id', id);
+                            deleteButton.setAttribute('aria-label', 'Delete history entry ' + (songTitle || 'Unknown track'));
+                            deleteButton.setAttribute('title', 'Delete entry');
+                            deleteButton.disabled = historyActionInProgress;
+                            makeTrashIcon(deleteButton);
+                            actions.appendChild(deleteButton);
+                        }
+                        row.appendChild(actions);
+                        tbody.appendChild(row);
+                    });
+                    table.appendChild(tbody);
+                    container.appendChild(table);
+
+                    status.textContent = items.length >= configuredLimit
+                        ? 'Showing the ' + configuredLimit + ' most recent played items, newest first.'
+                        : items.length + (items.length === 1
+                            ? ' played item recorded, newest first.'
+                            : ' played items recorded, newest first.');
+                    hasLoadedOnce = true;
+                }).catch(function (error) {
+                    showError(status, error);
+                }).finally(function () {
+                    requestInProgress = false;
+                    if (historyReloadPending) {
+                        historyReloadPending = false;
+                        loadHistory();
+                    }
+                });
+        }
+
+        function findHistoryItem(id) {
+            return historyItems.find(function (item) {
+                return String(getValue(item, 'Id', 'id') || '') === String(id || '');
+            }) || null;
+        }
+
+        function findHistoryEditorRow(id) {
+            return Array.from(view.querySelectorAll('tr[data-history-editor-for]')).find(function (row) {
+                return row.getAttribute('data-history-editor-for') === String(id || '');
+            }) || null;
+        }
+
+        function getPreserveLabelsForStation(stationName) {
+            var station = String(stationName || '').trim();
+            if (!station) return '';
+            var labels = [];
+            titleCleanupRules.forEach(function (rule) {
+                var ruleStation = getCleanupStation(rule);
+                var kind = getCleanupType(rule);
+                if (ruleStation.toLowerCase() === station.toLowerCase() &&
+                    ['TrailingBracketCode4', 'TrailingSquareBracketAny', 'TrailingParenthesisAny'].indexOf(kind) >= 0) {
+                    getCleanupPreserveLabels(rule).split(/[,;\r\n]+/).forEach(function (label) {
+                        var trimmed = label.trim();
+                        if (trimmed && !labels.some(function (existing) { return existing.toLowerCase() === trimmed.toLowerCase(); })) {
+                            labels.push(trimmed);
+                        }
+                    });
+                }
+            });
+            return labels.join(', ');
+        }
+
+        function inferStationCleanup(originalTitle, correctedTitle, preserveLabels) {
+            var original = String(originalTitle || '').trim();
+            var corrected = String(correctedTitle || '').trim();
+            var customPreserved = String(preserveLabels || '').split(/[,;\r\n]+/).map(function (label) {
+                return label.trim().replace(/^[\[\(]+|[\]\)]+$/g, '').toLowerCase();
+            }).filter(Boolean);
+            if (!original || !corrected || corrected.length >= original.length ||
+                original.toLowerCase().indexOf(corrected.toLowerCase()) !== 0) {
+                return { ok: false, message: 'A station-wide rule can only be inferred when the correction removes a trailing suffix.' };
+            }
+
+            var rawSuffix = original.substring(corrected.length);
+            var suffix = rawSuffix.trim();
+            if (!suffix || !(/^\s/.test(rawSuffix) || /^[\[(\-_|/]/.test(rawSuffix))) {
+                return { ok: false, message: 'The difference does not look like a separate trailing suffix. Choose This song only or edit a trailing suffix.' };
+            }
+
+            var inner;
+            if (/^\[[^\[\]]+\]$/.test(suffix)) {
+                inner = suffix.substring(1, suffix.length - 1).trim().toLowerCase();
+                if (['live', 'edit', 'demo', 'mono', 'full', 'remastered', 'radio edit', 'acoustic', 'explicit', 'instrumental', 'studio'].indexOf(inner) >= 0) {
+                    return { ok: false, message: 'This is a common meaningful label and is preserved by default. Choose This song only if you intentionally want to remove it.' };
+                }
+                if (customPreserved.indexOf(inner) >= 0) {
+                    return { ok: false, message: 'This suffix is in your labels-to-preserve list. Remove it from that list if you intend to clean it.' };
+                }
+                return { ok: true, ruleType: 'TrailingSquareBracketAny', description: 'Remove trailing [bracketed] suffixes on this station; built-in and custom labels are preserved.' };
+            }
+            if (/^\([^()]+\)$/.test(suffix)) {
+                inner = suffix.substring(1, suffix.length - 1).trim().toLowerCase();
+                if (['live', 'edit', 'demo', 'mono', 'full', 'remastered', 'radio edit', 'acoustic', 'explicit', 'instrumental', 'studio'].indexOf(inner) >= 0) {
+                    return { ok: false, message: 'This is a common meaningful label and is preserved by default. Choose This song only if you intentionally want to remove it.' };
+                }
+                if (customPreserved.indexOf(inner) >= 0) {
+                    return { ok: false, message: 'This suffix is in your labels-to-preserve list. Remove it from that list if you intend to clean it.' };
+                }
+                return { ok: true, ruleType: 'TrailingParenthesisAny', description: 'Remove trailing (parenthetical) suffixes on this station; built-in and custom labels are preserved.' };
+            }
+            return { ok: true, ruleType: 'ExactSuffix', suffix: suffix, description: 'Remove the exact suffix "' + suffix + '" from future titles on this station.' };
+        }
+
+        function updateHistoryEditPreview(editorRow) {
+            if (!editorRow) return;
+            var artistInput = editorRow.querySelector('[data-history-edit-artist]');
+            var correctedInput = editorRow.querySelector('[data-history-edit-corrected]');
+            var scopeInput = editorRow.querySelector('input[name="radioHistoryEditScope"]:checked');
+            var preserveInput = editorRow.querySelector('[data-history-edit-preserve]');
+            var preview = editorRow.querySelector('.radio-history-edit-preview');
+            var saveButton = editorRow.querySelector('.radio-history-edit-save');
+            if (!correctedInput || !scopeInput || !preview || !saveButton) return;
+
+            var original = editorRow.getAttribute('data-original-title') || '';
+            var current = editorRow.getAttribute('data-current-title') || original;
+            var currentArtist = editorRow.getAttribute('data-current-artist') || '';
+            var correctedArtist = artistInput ? artistInput.value.trim() : currentArtist;
+            var corrected = correctedInput.value.trim();
+            var preserveLabels = preserveInput ? preserveInput.value.trim() : '';
+            if (preserveInput) {
+                preserveInput.disabled = scopeInput.value !== 'Station';
+            }
+            if (!corrected) {
+                preview.textContent = 'Enter the corrected song title.';
+                saveButton.disabled = true;
+                return;
+            }
+            if (scopeInput.value === 'Station') {
+                if (correctedArtist !== currentArtist) {
+                    preview.textContent = 'Artist changes apply to This song only. Switch the correction scope to This song only to save an artist correction.';
+                    saveButton.disabled = true;
+                    return;
+                }
+                var inferred = inferStationCleanup(original, corrected, preserveLabels);
+                preview.textContent = inferred.ok
+                    ? 'Station rule preview: ' + inferred.description + (preserveLabels ? ' Labels to preserve: ' + preserveLabels + '.' : '')
+                    : inferred.message;
+                saveButton.disabled = historyActionInProgress || !inferred.ok;
+            } else {
+                var artistChanged = correctedArtist !== currentArtist;
+                var titleChanged = corrected !== current;
+                preview.textContent = !artistChanged && !titleChanged
+                    ? 'No artist or title change has been made yet.'
+                    : 'Save this exact artist/title correction for this station and incoming title; future exact matches will use it.';
+                saveButton.disabled = historyActionInProgress || (!artistChanged && !titleChanged);
+            }
+        }
+
+        function closeHistoryEditor(id) {
+            var scrollSnapshot = captureRadioMetaScrollPosition();
+            var targetId = id || activeHistoryEditId;
+            var editorRow = findHistoryEditorRow(targetId);
+            if (editorRow && editorRow.parentNode) editorRow.parentNode.removeChild(editorRow);
+            if (!id || activeHistoryEditId === id) activeHistoryEditId = '';
+            restoreRadioMetaScrollPosition(scrollSnapshot);
+        }
+
+        function openHistoryEditor(id) {
+            if (historyActionInProgress || !id) return;
+            var scrollSnapshot = captureRadioMetaScrollPosition();
+            if (activeHistoryEditId === id) {
+                closeHistoryEditor(id);
+                return;
+            }
+            if (activeHistoryEditId) closeHistoryEditor(activeHistoryEditId);
+
+            var item = findHistoryItem(id);
+            var row = Array.from(view.querySelectorAll('tr[data-history-row-id]')).find(function (candidate) {
+                return candidate.getAttribute('data-history-row-id') === String(id);
+            });
+            if (!item || !row || !row.parentNode) return;
+
+            var currentTitle = String(getValue(item, 'SongTitle', 'songTitle') || '');
+            var currentArtist = String(getValue(item, 'Artist', 'artist') || '');
+            var originalTitle = String(getValue(item, 'OriginalSongTitle', 'originalSongTitle') || currentTitle);
+            if (!originalTitle) originalTitle = currentTitle;
+            var editorRow = document.createElement('tr');
+            editorRow.className = 'radio-history-edit-row';
+            editorRow.setAttribute('data-history-editor-for', id);
+            editorRow.setAttribute('data-original-title', originalTitle);
+            editorRow.setAttribute('data-current-title', currentTitle);
+            editorRow.setAttribute('data-current-artist', currentArtist);
+            var cell = document.createElement('td');
+            cell.colSpan = 6;
+            var editor = document.createElement('div');
+            editor.className = 'radio-history-inline-editor';
+
+            var fields = document.createElement('div');
+            fields.className = 'radio-history-edit-fields';
+            var artistField = document.createElement('div');
+            artistField.className = 'radio-history-edit-field';
+            var artistFound = addText(artistField, 'radio-history-edit-found-value', 'Artist found: ' + (currentArtist || '(empty)'), 'div');
+            artistFound.style.cssText = 'font-size:0.85em;opacity:0.75;overflow-wrap:anywhere;margin-bottom:2px;';
+            var artistLabel = document.createElement('label');
+            artistLabel.textContent = 'Corrected artist';
+            var artistInput = document.createElement('input');
+            artistInput.type = 'text';
+            artistInput.className = 'emby-input';
+            artistInput.maxLength = 300;
+            artistInput.value = currentArtist;
+            artistInput.setAttribute('data-history-edit-artist', 'true');
+            artistLabel.appendChild(artistInput);
+            artistField.appendChild(artistLabel);
+            fields.appendChild(artistField);
+
+            var correctedField = document.createElement('div');
+            correctedField.className = 'radio-history-edit-field';
+            var titleFound = addText(correctedField, 'radio-history-edit-found-value', 'Title found: ' + originalTitle, 'div');
+            titleFound.style.cssText = 'font-size:0.85em;opacity:0.75;overflow-wrap:anywhere;margin-bottom:2px;';
+            var correctedLabel = document.createElement('label');
+            correctedLabel.textContent = 'Corrected song title';
+            var correctedInput = document.createElement('input');
+            correctedInput.type = 'text';
+            correctedInput.className = 'emby-input';
+            correctedInput.maxLength = 300;
+            correctedInput.value = currentTitle;
+            correctedInput.setAttribute('data-history-edit-corrected', 'true');
+            correctedLabel.appendChild(correctedInput);
+            correctedField.appendChild(correctedLabel);
+            fields.appendChild(correctedField);
+            editor.appendChild(fields);
+
+            addText(editor, '', 'Apply correction to:', 'strong');
+            var scope = document.createElement('div');
+            scope.className = 'radio-history-edit-scope';
+            [
+                { value: 'SongOnly', label: 'This song only', checked: true },
+                { value: 'Station', label: 'Entire station', checked: false }
+            ].forEach(function (option) {
+                var label = document.createElement('label');
+                var radio = document.createElement('input');
+                radio.type = 'radio';
+                radio.name = 'radioHistoryEditScope';
+                radio.value = option.value;
+                radio.checked = option.checked;
+                radio.addEventListener('change', function () { updateHistoryEditPreview(editorRow); });
+                label.appendChild(radio);
+                label.appendChild(document.createTextNode(option.label));
+                scope.appendChild(label);
+            });
+            editor.appendChild(scope);
+
+            var preserveField = document.createElement('div');
+            preserveField.className = 'radio-history-edit-preserve';
+            var preserveLabel = document.createElement('label');
+            preserveLabel.textContent = 'Additional labels to preserve (for entire station)';
+            var preserveInput = document.createElement('input');
+            preserveInput.type = 'text';
+            preserveInput.className = 'emby-input';
+            preserveInput.maxLength = 500;
+            preserveInput.placeholder = 'e.g. Live, Radio Edit, Remastered';
+            preserveInput.setAttribute('data-history-edit-preserve', 'true');
+            preserveInput.value = getPreserveLabelsForStation(String(getValue(item, 'StationName', 'stationName') || ''));
+            preserveLabel.appendChild(preserveInput);
+            preserveField.appendChild(preserveLabel);
+            addText(preserveField, 'radio-history-edit-preserve-help', 'Common labels are already preserved. Add extra labels separated by commas or semicolons. Used only for Entire station.', 'div');
+            editor.appendChild(preserveField);
+
+            var preview = document.createElement('div');
+            preview.className = 'radio-history-edit-preview';
+            preview.setAttribute('role', 'status');
+            preview.setAttribute('aria-live', 'polite');
+            editor.appendChild(preview);
+
+            var buttons = document.createElement('div');
+            buttons.className = 'radio-history-edit-actions';
+            var cancel = document.createElement('button');
+            cancel.type = 'button';
+            cancel.className = 'emby-button raised radio-history-edit-cancel';
+            cancel.setAttribute('data-history-edit-cancel-id', id);
+            cancel.textContent = 'Cancel';
+            var save = document.createElement('button');
+            save.type = 'button';
+            save.className = 'emby-button raised button-submit radio-history-edit-save';
+            save.setAttribute('data-history-edit-save-id', id);
+            save.textContent = 'Save correction';
+            buttons.appendChild(cancel);
+            buttons.appendChild(save);
+            editor.appendChild(buttons);
+            cell.appendChild(editor);
+            editorRow.appendChild(cell);
+            row.parentNode.insertBefore(editorRow, row.nextSibling);
+            activeHistoryEditId = String(id);
+            artistInput.addEventListener('input', function () { updateHistoryEditPreview(editorRow); });
+            correctedInput.addEventListener('input', function () { updateHistoryEditPreview(editorRow); });
+            preserveInput.addEventListener('input', function () { updateHistoryEditPreview(editorRow); });
+            updateHistoryEditPreview(editorRow);
+            focusRadioMetaWithoutScrolling(correctedInput, true);
+            restoreRadioMetaScrollPosition(scrollSnapshot);
+        }
+
+        function saveHistoryTitleCorrection(id) {
+            if (historyActionInProgress || !id) return;
+            var scrollSnapshot = captureRadioMetaScrollPosition();
+            var editorRow = findHistoryEditorRow(id);
+            if (!editorRow) return;
+            var artistInput = editorRow.querySelector('[data-history-edit-artist]');
+            var correctedInput = editorRow.querySelector('[data-history-edit-corrected]');
+            var scopeInput = editorRow.querySelector('input[name="radioHistoryEditScope"]:checked');
+            var preserveInput = editorRow.querySelector('[data-history-edit-preserve]');
+            var status = view.querySelector('#radioStatus');
+            var correctedArtist = artistInput ? artistInput.value.trim() : '';
+            var correctedTitle = correctedInput ? correctedInput.value.trim() : '';
+            var preserveLabels = preserveInput ? preserveInput.value.trim() : '';
+            var scope = scopeInput ? scopeInput.value : 'SongOnly';
+            var item = findHistoryItem(id);
+            if (!item) {
+                if (status) status.textContent = 'History entry not found. Refresh the history and try again.';
+                return;
+            }
+            var currentArtist = String(getValue(item, 'Artist', 'artist') || '');
+            if (!correctedArtist && currentArtist && scope !== 'Station') {
+                if (status) status.textContent = 'Enter the corrected artist (or restore the existing artist).';
+                if (artistInput) artistInput.focus();
+                return;
+            }
+            if (scope === 'Station' && correctedArtist !== currentArtist) {
+                if (status) status.textContent = 'Artist corrections apply to This song only. Switch the correction scope to This song only.';
+                if (artistInput) artistInput.focus();
+                return;
+            }
+            if (!correctedTitle) {
+                if (status) status.textContent = 'Enter a corrected title before saving.';
+                if (correctedInput) correctedInput.focus();
+                return;
+            }
+            if (scope === 'Station') {
+                var inferred = inferStationCleanup(
+                    String(getValue(item, 'OriginalSongTitle', 'originalSongTitle') || getValue(item, 'SongTitle', 'songTitle') || ''),
+                    correctedTitle,
+                    preserveLabels);
+                if (!inferred.ok) {
+                    updateHistoryEditPreview(editorRow);
+                    return;
+                }
+            }
+
+            historyActionInProgress = true;
+            setHistoryButtonsDisabled(true);
+            var saveButton = editorRow.querySelector('.radio-history-edit-save');
+            var cancelButton = editorRow.querySelector('.radio-history-edit-cancel');
+            if (saveButton) saveButton.disabled = true;
+            if (cancelButton) cancelButton.disabled = true;
+            if (status) status.textContent = 'Saving corrected artist and title...';
+
+            ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('RadioMeta/History/Edit'),
+                data: JSON.stringify({ Id: id, CorrectedArtist: scope === 'Station' ? '' : correctedArtist, CorrectedTitle: correctedTitle, Scope: scope, PreserveLabels: preserveLabels }),
+                contentType: 'application/json'
+            }).then(function (data) {
+                var error = getValue(data, 'Error', 'error');
+                if (error) throw new Error(error);
+
+                item.SongTitle = correctedTitle;
+                if (scope !== 'Station' && correctedArtist) item.Artist = correctedArtist;
+                var historyRow = Array.from(view.querySelectorAll('tr[data-history-row-id]')).find(function (row) {
+                    return row.getAttribute('data-history-row-id') === String(id);
+                });
+                if (historyRow && historyRow.children[2]) historyRow.children[2].textContent = correctedTitle;
+                if (historyRow && historyRow.children[3]) historyRow.children[3].textContent = item.Artist || '—';
+                closeHistoryEditor(String(id));
+                if (status) status.textContent = getValue(data, 'Message', 'message') || 'Artist/title correction saved.';
+                if (scope === 'Station') {
+                    loadTitleCleanupRules();
+                } else {
+                    loadTitleCorrections();
+                }
+            }).catch(function (error) {
+                var message = error && error.message ? error.message : String(error);
+                if (status) status.textContent = 'Unable to save artist/title correction: ' + message;
+                console.error('Radio Meta history artist/title correction:', error);
+            }).finally(function () {
+                historyActionInProgress = false;
+                setHistoryButtonsDisabled(false);
+                if (activeHistoryEditId) {
+                    var activeEditor = findHistoryEditorRow(activeHistoryEditId);
+                    if (activeEditor) updateHistoryEditPreview(activeEditor);
+                }
+                restoreRadioMetaScrollPosition(scrollSnapshot);
+            });
+        }
+

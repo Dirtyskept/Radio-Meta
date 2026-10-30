@@ -1,0 +1,35 @@
+RADIO META v1.3.111 — COMPONENT DIAGNOSTICS
+================================================
+
+Why this step exists
+--------------------
+The proxy and station-file operations now have their own diagnostics. This release adds visibility into a few remaining areas that previously had no simple summary in the report. These are read-only measurements; they do not change station playback or settings.
+
+New diagnostic sections
+-----------------------
+1. Background component health
+   Confirms whether the playback station-capture event handler and the session metadata publisher were started, and whether the history store initialized.
+
+2. Metadata cache health
+   Reports counts, fresh/expired counts, capacity limits, and time-to-live values for the FFprobe/probe cache, short-lived network metadata cache, and unsupported-Shoutcast-endpoint cache. Cache keys, stream URLs, and filesystem paths are not returned. An expired entry reported in memory is not automatically a failure; the cache cleans up as part of its normal maintenance. Only exceeding a configured capacity is a warning.
+
+3. Artwork download health
+   Counts explicit logo-URL download/validation attempts made by the station Create/Edit forms, including successful image validation and failures since plugin start. It reports only a safe summary, not the URL or raw error. These counters reset when the plugin/server process restarts.
+
+4. Local station artwork inventory
+   In a configured Station Folder, checks up to 2,048 .strm files for matching JPG/JPEG/PNG/WebP art files. It returns counts only—no filenames or paths. Missing artwork is optional and informational. In automatic folder mode, the inventory is skipped because no fixed folder exists.
+
+What did not change
+-------------------
+- No metadata parsing, station-switching, StationOnly, Shoutcast/ICY timeout, or 40-interval capture behavior changed.
+- No proxy playback logic, station mutation logic, plugin GUID, or configuration XML filename changed.
+- No WebLoader files or stock Emby nowplayingbar.js files changed.
+- No minification or code trimming was performed.
+
+Testing requested
+-----------------
+Build this source on the Windows machine running Emby. After installation, run diagnostics and check that the two background components are started and the history store is initialized. Try adding a logo URL to a disposable station to exercise the artwork-download counters. Confirm the local artwork inventory is either completed for the configured folder or explicitly skipped in automatic mode. Then rerun the existing proxy and station-operation tests.
+
+Verification limits
+-------------------
+JavaScript syntax, generated dashboard bundle consistency, ZIP integrity, manifest hashes, and WebLoader byte-identity are checked in this package creation pass. C# compilation and live Emby testing have not been performed here.

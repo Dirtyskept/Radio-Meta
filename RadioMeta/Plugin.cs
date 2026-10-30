@@ -29,9 +29,9 @@ public sealed class RadioMetadataIgnorePhraseRule
 
 /// <summary>
 /// Metadata mode scoped by a .strm station title or an exact Emby device name.
-/// Station matches take priority over device-wide matches. Mode is Automatic,
-/// StationOnly, or Carplay. Carplay clears injected metadata on station changes
-/// so the new station title/artwork can show while the stability delay runs.
+/// Station matches take priority over device-wide matches. Modes are Automatic,
+/// StationOnly (disable lookup), StationDelay (show the first song immediately,
+/// then delay later changes), or Carplay (preserve Carplay's existing transition behavior).
 /// </summary>
 public sealed class RadioStationMetadataModeRule
 {
@@ -76,6 +76,8 @@ public sealed class RadioTitleCorrectionRule
     public string StationName { get; set; } = string.Empty;
     public string OriginalTitle { get; set; } = string.Empty;
     public string CorrectedTitle { get; set; } = string.Empty;
+    // Optional exact artist override; blank keeps the incoming artist unchanged.
+    public string CorrectedArtist { get; set; } = string.Empty;
 }
 
 public sealed class PluginConfiguration : BasePluginConfiguration
@@ -95,6 +97,10 @@ public sealed class PluginConfiguration : BasePluginConfiguration
     // not a persistent second audio stream.
     public bool EnableDirectIcyFallback { get; set; } = true;
 
+    // Per-station adaptive source learning. Disabling this restores the
+    // existing parallel Shoutcast/direct-ICY lookup behavior without rebuilding.
+    public bool EnableAdaptiveMetadataRouting { get; set; } = true;
+
     // Number of most-recent played tracks retained in the history JSON.
     public int RadioHistoryLimit { get; set; } = 200;
 
@@ -103,7 +109,8 @@ public sealed class PluginConfiguration : BasePluginConfiguration
     public List<RadioMetadataIgnorePhraseRule> IgnoreMetadataPhrases { get; set; } = new();
 
     // Per-station mode overrides. Missing entries default to Automatic.
-    // StationOnly skips track metadata lookup while preserving stream playback.
+    // StationOnly skips track metadata lookup. StationDelay publishes the first
+    // valid song immediately on station entry, then delays subsequent changes.
     public List<RadioStationMetadataModeRule> StationMetadataModes { get; set; } = new();
 
     // Optional station-specific or global rules that clean suffixes from valid song titles.
@@ -121,7 +128,13 @@ public sealed class RadioMetaPlugin :
 
     public RadioMetaDiagnosticEventStore DiagnosticEvents { get; } = new();
 
+    /// <summary>Bounded in-memory history of station-file and post-change refresh results.</summary>
+    public RadioMetaStationOperationStore StationOperationEvents { get; } = new();
+
     public RadioMetaPerformanceMetricsStore PerformanceMetrics { get; } = new();
+
+    /// <summary>Bounded five-minute process-memory history for leak-trend diagnostics.</summary>
+    public RadioMetaMemoryDiagnosticsStore MemoryDiagnostics { get; } = new();
 
     public RadioMetadataReader MetadataReader { get; }
 
@@ -136,6 +149,10 @@ public sealed class RadioMetaPlugin :
     public RadioCurrentlyPlayingStationStore CurrentlyPlayingStationStore { get; } = new();
 
     public RadioPlayHistoryStore? HistoryStore { get; private set; }
+
+    /// <summary>Runtime state for diagnostic-only health checks of background event handlers.</summary>
+    public bool StationCaptureStarted { get; internal set; }
+    public bool SessionMetadataPublisherStarted { get; internal set; }
 
     public void InitializeHistoryStore(ILogger logger)
     {
@@ -163,7 +180,8 @@ public sealed class RadioMetaPlugin :
         : base(applicationPaths, xmlSerializer)
     {
         Configuration ??= new PluginConfiguration();
-        MetadataReader = new RadioMetadataReader(DiagnosticEvents, PerformanceMetrics);
+        var configurationDirectory = Path.GetDirectoryName(ConfigurationFilePath);
+        MetadataReader = new RadioMetadataReader(DiagnosticEvents, PerformanceMetrics, configurationDirectory);
         CurrentTrackService = new RadioCurrentTrackService(this);
         Instance = this;
     }
@@ -320,9 +338,9 @@ public sealed class RadioMetaPlugin :
             },
             new PluginPageInfo
             {
-                Name = "RadioMetaDashboard-v16.js",
+                Name = "RadioMetaDashboard.js",
                 EmbeddedResourcePath =
-                    "RadioMeta.WebUI.RadioMetaDashboard-v16.js"
+                    "RadioMeta.WebUI.RadioMetaDashboard.js"
             },
             new PluginPageInfo
             {
@@ -345,12 +363,17 @@ public sealed class RadioMetaPlugin :
 
 public sealed class RadioMetaEntryPoint : IServerEntryPoint
 {
+    private static RadioMetaProxyService? _activeProxyService;
+    internal static string GetProxyBaseUrl() => _activeProxyService?.BaseUrl ?? string.Empty;
+    internal static RadioMetaProxyService? GetActiveProxyService() => _activeProxyService;
+
     private readonly ILogger _logger;
     private readonly RadioMetaPlugin? _plugin;
     private readonly ISessionManager _sessionManager;
 
     private RadioMetaSessionTitleInjector? _titleInjector;
     private RadioCurrentlyPlayingStationCapture? _currentlyPlayingStationCapture;
+    private RadioMetaProxyService? _proxyService;
 
     public RadioMetaEntryPoint(IApplicationHost applicationHost)
     {
@@ -372,6 +395,8 @@ public sealed class RadioMetaEntryPoint : IServerEntryPoint
                 "Radio Meta plugin instance was not found.");
             return;
         }
+
+        _plugin.MemoryDiagnostics.Start();
 
         var configuredFolder = _plugin.GetConfiguredStationFolder();
         var folder = _plugin.GetStationFolder();
@@ -415,6 +440,21 @@ public sealed class RadioMetaEntryPoint : IServerEntryPoint
             _sessionManager,
             _logger);
         _currentlyPlayingStationCapture.Start();
+        _plugin.StationCaptureStarted = _currentlyPlayingStationCapture.IsStarted;
+
+        if (folderAvailable)
+        {
+            try
+            {
+                var ffmpegPath = RadioMetaProxyService.ResolveFfmpegPath(ffprobePath);
+                _proxyService = new RadioMetaProxyService(folder, ffmpegPath, _logger);
+                _activeProxyService = _proxyService;
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn("Radio Meta proxy did not start ({0}); normal station playback remains unchanged.", ex.GetType().Name);
+            }
+        }
 
         _titleInjector = new RadioMetaSessionTitleInjector(
             _plugin,
@@ -422,6 +462,7 @@ public sealed class RadioMetaEntryPoint : IServerEntryPoint
             _logger);
 
         _titleInjector.Start();
+        _plugin.SessionMetadataPublisherStarted = _titleInjector.IsStarted;
 
         if (string.IsNullOrWhiteSpace(ffprobePath) ||
             !File.Exists(ffprobePath))
@@ -461,9 +502,15 @@ public sealed class RadioMetaEntryPoint : IServerEntryPoint
 
     public void Dispose()
     {
+        if (_plugin is not null) _plugin.MemoryDiagnostics.Stop();
         _currentlyPlayingStationCapture?.Dispose();
         _currentlyPlayingStationCapture = null;
+        if (_plugin is not null) _plugin.StationCaptureStarted = false;
         _titleInjector?.Dispose();
         _titleInjector = null;
+        if (_plugin is not null) _plugin.SessionMetadataPublisherStarted = false;
+        _proxyService?.Dispose();
+        if (ReferenceEquals(_activeProxyService, _proxyService)) _activeProxyService = null;
+        _proxyService = null;
     }
 }

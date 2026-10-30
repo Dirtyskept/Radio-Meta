@@ -1,0 +1,13 @@
+RADIO META v1.3.105 — METADATA-FREE STATION FALLBACK
+
+- Ignores a carried-over RadioMetaStation ProviderId when it contradicts both the selected .strm filename and the current item's visible name, so a previous station cannot trigger the wrong StationOnly rule during a handoff.
+
+OZFM is configured to use StationOnly mode because it has no song/artist metadata. StationOnly means Radio Meta must not perform metadata lookups for that station. This is different from Automatic mode returning no result.
+
+The station transition display should show the selected .strm title while no track metadata is expected. The old station's song/artist must not remain visible as if it belongs to the new station.
+
+The diagnostic report now includes the current station metadata mode, the matching rule when available, configured StationOnly rule names, and an enforcement check. For a correctly matched StationOnly station it should say lookup is intentionally disabled; empty track cache and missing RadioMeta ProviderIds are expected. If the active station is shown as Automatic while a StationOnly rule is intended, compare the detected station title with the saved exact station/file name in the report.
+
+Live Shoutcast/ICY timeouts and interval limits are unchanged. Negative caching of unsupported Shoutcast endpoints does not reduce the ICY window.
+
+Build and test: switch from a metadata station to OZFM and back. OZFM should show its station title and no new track metadata probes should be recorded for OZFM. Another station with metadata should continue to produce song and artist. Also test rapid changes and ordinary album tracks. This is a source package, not a compiled DLL; compile and test against the Windows Emby installation before replacing a known-good build.

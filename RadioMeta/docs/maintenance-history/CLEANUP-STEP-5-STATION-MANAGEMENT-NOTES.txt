@@ -1,0 +1,42 @@
+RADIO META v1.3.108 — STEP 5: STATION MANAGEMENT CLEANUP
+=======================================================
+
+What changed
+------------
+The Create .strm and Edit station forms used the same station-name safety
+checks in two separate places. They now call one shared helper. This reduces
+the chance that a future fix updates one form but accidentally leaves the other
+with different filename rules.
+
+What did NOT change
+-------------------
+- The allowed/blocked station names are unchanged. Empty names still receive
+  the existing Create-specific message; invalid names still receive the
+  existing Create or Edit error message.
+- Stream URL validation, artwork downloads, proxy sidecars, library refresh,
+  metadata parsing, playback display, StationOnly, and ICY limits are unchanged.
+- No minification was performed. WebLoader files are kept byte-for-byte.
+
+Display integration review
+--------------------------
+I reviewed the player/display source modules for clearly unused functions.
+The static review did not identify a display helper that is safe to delete
+with confidence. Older style IDs and stable internal helper identifiers are
+used for compatibility with a browser that may still have an earlier helper
+loaded, so they are deliberately retained. The recent station-transition code
+is sensitive and is left untouched because the user's latest tests showed no
+old-song carryover.
+
+Verification limits
+-------------------
+The station-name validation duplication was checked statically, JavaScript
+bundles were rebuilt and syntax-checked, and ZIP/manifest integrity was tested.
+C# compilation and runtime Create/Edit tests must still be performed on the
+Windows Emby host.
+
+Suggested user test
+-------------------
+Build the source and create one disposable direct station. Then edit that
+station's name and save it. Confirm a valid name still works and an invalid
+filename (for example, one containing a slash) is rejected. Do not test by
+editing a proxy-enabled station; that existing guard is intentional.

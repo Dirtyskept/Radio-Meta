@@ -1,0 +1,19 @@
+RADIO META v1.3.98 — TARGETED EMBY LIBRARY REFRESH
+=================================================
+
+Create .strm already requests a targeted refresh for the Emby library containing
+the configured Station Folder. This merge carries the same behavior to successful
+Save changes operations and successful proxy enable/disable operations.
+
+The C# APIs return whether a unique target was identified, along with the target
+item ID, library name, location, and any resolution message. The dashboard then
+requests Emby's targeted Items/{itemId}/Refresh route using the same recursive
+refresh pattern as Create .strm, reports the refresh result, and rescans the Radio
+Meta station folder. A Radio Meta list rescan is not treated as a substitute for
+an Emby library refresh.
+
+If Radio Meta cannot safely resolve a unique library target, it reports that
+result and recommends a manual Emby library scan instead of claiming success.
+
+C# compilation and live library behavior must be verified on the Windows Emby
+host because the .NET SDK and Emby assemblies were not available for this merge.

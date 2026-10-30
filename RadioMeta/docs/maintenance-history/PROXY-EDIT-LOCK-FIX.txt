@@ -1,0 +1,19 @@
+RADIO META v1.3.98 — PROXY STATION EDIT LOCK
+===========================================
+
+When a discovered station is proxy-enabled, its edit form visibly locks station
+name, stream URL, logo URL and Save changes. This is intentional: a previous edit
+attempt could appear to succeed while leaving the stored upstream URL in the proxy
+sidecar unchanged.
+
+The per-station proxy checkbox remains interactive and takes effect immediately.
+When proxy is switched off, the .strm is restored to its upstream URL, the sidecar
+is removed, a targeted Emby library refresh is requested, and the station list is
+rescanned. Reopen the pencil editor after the refresh to edit the name, stream URL
+or artwork. Cancel and Delete remain available while the edit lock is active.
+
+The API also rejects direct Edit requests for proxy-enabled stations before it
+changes files; the lock is not only a browser-side behavior.
+
+Source of truth: RadioMeta/WebUI/DashboardSections/02-Station-Folder-Panel.js.part
+and RadioMeta/RadioStationManagerService.Mutations.cs.

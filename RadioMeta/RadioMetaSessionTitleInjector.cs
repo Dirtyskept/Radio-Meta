@@ -1,7 +1,5 @@
-﻿using System;
-using System.Collections;
+using System;
 using System.Collections.Generic;
-using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -17,28 +15,11 @@ public sealed class RadioMetaSessionTitleInjector : IDisposable
     private readonly ISessionManager _sessionManager;
     private readonly ILogger _logger;
 
-    private readonly ConcurrentDictionary<string, SessionStationState>
-        _sessionStations = new(StringComparer.OrdinalIgnoreCase);
-
-    private readonly ConcurrentDictionary<string, byte>
-        _pendingUpdates = new(StringComparer.OrdinalIgnoreCase);
-
-    // The startup delay applies once per playback session, not to every
-    // subsequent metadata refresh.
-    private readonly ConcurrentDictionary<string, byte>
-        _initialDelayCompleted = new(StringComparer.OrdinalIgnoreCase);
+    private readonly RadioMetaPlaybackSessionStateStore _sessionState = new();
+    private readonly RadioMetaPlaybackStationResolver _stationResolver;
+    private readonly RadioMetaSessionMetadataProcessor _metadataProcessor;
 
     private bool _started;
-
-    private sealed class SessionStationState
-    {
-        public string StationPath { get; }
-
-        public SessionStationState(string stationPath)
-        {
-            StationPath = stationPath;
-        }
-    }
 
     public RadioMetaSessionTitleInjector(
         RadioMetaPlugin plugin,
@@ -48,7 +29,12 @@ public sealed class RadioMetaSessionTitleInjector : IDisposable
         _plugin = plugin;
         _sessionManager = sessionManager;
         _logger = logger;
+        _stationResolver = new RadioMetaPlaybackStationResolver(plugin);
+        _metadataProcessor = new RadioMetaSessionMetadataProcessor(
+            plugin, logger, _sessionState, _stationResolver);
     }
+
+    public bool IsStarted => _started;
 
     public void Start()
     {
@@ -89,8 +75,11 @@ public sealed class RadioMetaSessionTitleInjector : IDisposable
 
             var candidates = new[]
             {
-                (Path: args.Item?.Path, Item: (object?)args.Item),
+                // The session's currently playing item is the strongest signal. During a brief
+                // transition gap it may be null; then prefer the event item before full-info data,
+                // which can momentarily still describe the previous station.
                 (Path: playSession.NowPlayingItem?.Path, Item: (object?)playSession.NowPlayingItem),
+                (Path: args.Item?.Path, Item: (object?)args.Item),
                 (Path: playSession.FullNowPlayingItem?.Path, Item: (object?)playSession.FullNowPlayingItem)
             }
             .Where(candidate => !string.IsNullOrWhiteSpace(candidate.Path))
@@ -102,7 +91,7 @@ public sealed class RadioMetaSessionTitleInjector : IDisposable
             }
 
             var stationPath = candidates
-                .Select(candidate => ResolveStationPath(candidate.Path, candidate.Item))
+                .Select(candidate => _stationResolver.ResolveStationPath(candidate.Path, candidate.Item))
                 .FirstOrDefault(path => path is not null);
 
             if (stationPath is null)
@@ -110,13 +99,13 @@ public sealed class RadioMetaSessionTitleInjector : IDisposable
                 // Do not change a non-radio playback item. If this session was
                 // previously tracking a radio station, end its canonical
                 // current-track state as it moves to ordinary playback.
-                if (_sessionStations.TryRemove(sessionKey, out _))
+                if (_sessionState.TryRemoveStation(sessionKey, out _))
                 {
                     _plugin.CurrentTrackService.EndSession(sessionKey);
-                    _initialDelayCompleted.TryRemove(sessionKey, out _);
+                    _sessionState.ResetInitialDelay(sessionKey);
                 }
                 else if (candidates.Any(candidate =>
-                    candidate.Path is not null && IsStrmPath(candidate.Path)))
+                    candidate.Path is not null && _stationResolver.IsStrmPath(candidate.Path)))
                 {
                     // A .strm item which does not pass the configured-folder or
                     // automatic audio-item checks is not owned by this plugin.
@@ -128,68 +117,81 @@ public sealed class RadioMetaSessionTitleInjector : IDisposable
 
             var currentItem = playSession.NowPlayingItem;
 
-            if (currentItem is null)
-            {
-                return;
-            }
-
+            // Resolve the station policy before requiring a hydrated NowPlayingItem. Emby can
+            // briefly omit that item during a station handoff; a StationOnly rule must still
+            // prevent any new metadata request during that gap.
             var stationName = Path.GetFileNameWithoutExtension(stationPath);
-            var proposedState = new SessionStationState(stationPath);
-            var hasPreviousState = _sessionStations.TryGetValue(sessionKey, out var previousState);
+            // Don't let a stale name/ProviderId from a different candidate item decide this
+            // station's mode. Only inspect title/ProviderId identities attached to the item(s)
+            // whose path resolves to the selected station .strm.
+            var stationIdentityItems = candidates
+                .Where(candidate => candidate.Item is not null && !string.IsNullOrWhiteSpace(candidate.Path) &&
+                    _stationResolver.PathsEqual(candidate.Path!, stationPath))
+                .Select(candidate => candidate.Item)
+                .Cast<object?>()
+                .ToArray();
+            var stationIdentityCandidates = _stationResolver.GetStationNameCandidates(stationPath, stationIdentityItems);
+            var metadataMode = _plugin.CurrentTrackService.GetStationMetadataModeDiagnostic(
+                stationIdentityCandidates, session.DeviceName);
+            var hasPreviousState = _sessionState.TryGetStationPath(sessionKey, out var previousStationPath);
             var stationChanged = hasPreviousState &&
-                !PathsEqual(previousState!.StationPath, stationPath);
+                !_stationResolver.PathsEqual(previousStationPath!, stationPath);
 
             if (stationChanged)
             {
-                _initialDelayCompleted.TryRemove(sessionKey, out _);
+                _sessionState.ResetInitialDelay(sessionKey);
                 _plugin.CurrentTrackService.EndSession(sessionKey);
+                // Remove only Radio Meta's machine-readable song fields from the new station item.
+                // Emby's own Name/title and artwork remain untouched, so the .strm title can show.
+                ClearPublishedMetadataForStationCandidates(playSession, candidates, stationPath, sessionKey);
             }
 
             // In Carplay mode, do not carry injected metadata from the previous
             // station into the new station's initial display. Clearing only our
             // ProviderIds leaves Emby's .strm title and station artwork intact;
             // the normal configured stability delay then gates the new song data.
-            if (_plugin.CurrentTrackService.IsStationCarplayMode(stationName, session.DeviceName) &&
-                (!hasPreviousState || stationChanged))
+            if (string.Equals(metadataMode.Mode, "Carplay", StringComparison.OrdinalIgnoreCase) && !hasPreviousState)
             {
-                _plugin.CurrentTrackService.ClearPublishedMetadata(currentItem, sessionKey);
+                // On the first observation in Carplay mode, clear old session-only ProviderIds too.
+                // Later station changes are already cleared above for every mode.
+                ClearPublishedMetadataForStationCandidates(playSession, candidates, stationPath, sessionKey);
             }
 
-            _sessionStations.AddOrUpdate(
-                sessionKey,
-                proposedState,
-                (_, existing) =>
-                    PathsEqual(existing.StationPath, stationPath)
-                        ? existing
-                        : proposedState);
+            _sessionState.SetStationPath(sessionKey, stationPath);
 
             _plugin.CurrentTrackService.MarkStationActive(sessionKey, stationName, stationPath, session.DeviceName);
-            if (_plugin.CurrentTrackService.IsStationMetadataLookupDisabled(stationName, session.DeviceName))
+            if (metadataMode.LookupDisabled)
             {
-                // StationOnly means no item-metadata inspection, HTTP/ICY read,
-                // FFprobe, provider-ID update, or new history entry for this station.
-                // Clear any previously published track so stale data cannot linger.
-                lock (playSession)
-                {
-                    var item = playSession.NowPlayingItem;
-                    if (item is not null && SessionStillUsesStation(playSession, stationPath))
-                    {
-                        _plugin.CurrentTrackService.ClearPublishedMetadata(item, sessionKey);
-                    }
-                }
+                // StationOnly means the station is intentionally not queried. This is a normal
+                // configured state, not a failed metadata lookup. Clear old song metadata so the
+                // .strm title remains the player's identity, and emit an explicit diagnostic note.
+                ClearPublishedMetadataForStationCandidates(playSession, candidates, stationPath, sessionKey);
                 _plugin.CurrentTrackService.MarkUnavailable(sessionKey);
-                _initialDelayCompleted.TryRemove(sessionKey, out _);
+                _sessionState.ResetInitialDelay(sessionKey);
+                if (_sessionState.TryMarkStationOnlySkip(sessionKey, stationPath))
+                {
+                    _plugin.DiagnosticEvents.Record(stationName, "Station metadata mode", "skipped", string.Empty, string.Empty,
+                        "StationOnly rule matched (" + metadataMode.MatchedRuleStationName + "); metadata lookups intentionally disabled. Playback continues using the station title.");
+                }
+                return;
+            }
+            _sessionState.ClearStationOnlySkip(sessionKey);
+
+            // Do not start a lookup while Emby has no hydrated item. The station path and policy
+            // are already recorded; the next progress event will retry once the item is present.
+            if (currentItem is null)
+            {
                 return;
             }
 
             // Only one metadata read per session may be in flight.
-            if (!_pendingUpdates.TryAdd(sessionKey, 0))
+            if (!_sessionState.TryBeginMetadataUpdate(sessionKey))
             {
                 return;
             }
 
             _ = Task.Run(() =>
-                UpdateSessionMetadataAsync(session, playSession, sessionKey,
+                _metadataProcessor.UpdateSessionMetadataAsync(session, playSession, sessionKey,
                     stationPath));
         }
         catch (Exception ex)
@@ -200,378 +202,34 @@ public sealed class RadioMetaSessionTitleInjector : IDisposable
         }
     }
 
-    private async Task UpdateSessionMetadataAsync(
-        SessionInfo session,
-        PlaySessionInfo originalPlaySession,
-        string sessionKey,
-        string stationPath)
+    private void ClearPublishedMetadataForStationCandidates(
+        PlaySessionInfo playSession,
+        IEnumerable<(string? Path, object? Item)> candidates,
+        string stationPath,
+        string sessionKey)
     {
-        try
+        // Candidate objects are captured from this playback event. Only clear ProviderIds on
+        // objects whose path is the selected station's .strm; never alter Emby's display title.
+        // Share the same lock used by the session publisher to avoid racing a metadata write.
+        lock (playSession)
         {
-            var needsInitialDelay = !_initialDelayCompleted.ContainsKey(sessionKey);
-            var stationName = Path.GetFileNameWithoutExtension(stationPath);
-
-            // Check Emby's own item metadata immediately. If it already has
-            // both fields, no external metadata reader is needed.
-            var beforeProbe = session.GetPlaySessionInfo(sessionKey)
-                ?? originalPlaySession;
-            if (!SessionStillUsesStation(beforeProbe, stationPath))
+            // In some Emby session DTOs NowPlayingItem exposes the resolved stream URL while
+            // FullNowPlayingItem retains the .strm path. If either proves this session is on the
+            // selected station, clear Radio Meta ProviderIds from the live NowPlayingItem too.
+            var sessionStillUsesStation = _stationResolver.SessionStillUsesStation(playSession, stationPath);
+            var liveItem = playSession.NowPlayingItem;
+            if (sessionStillUsesStation && liveItem is not null)
             {
-                return;
+                _plugin.CurrentTrackService.ClearPublishedMetadata(liveItem, sessionKey);
             }
 
-            if (_plugin.CurrentTrackService.IsStationMetadataLookupDisabled(stationName, session.DeviceName))
+            foreach (var candidate in candidates)
             {
-                ClearSessionTrackMetadata(session, originalPlaySession, sessionKey, stationPath);
-                return;
-            }
+                if (candidate.Item is null || string.IsNullOrWhiteSpace(candidate.Path))
+                    continue;
 
-            RadioStationMetadata metadata;
-            var metadataSource = "Unknown";
-            if (TryGetExistingArtistAndSong(
-                    stationName,
-                    beforeProbe.NowPlayingItem,
-                    out var existingArtist,
-                    out var existingSong) ||
-                TryGetExistingArtistAndSong(
-                    stationName,
-                    beforeProbe.FullNowPlayingItem,
-                    out existingArtist,
-                    out existingSong))
-            {
-                metadata = new RadioStationMetadata
-                {
-                    StationName = stationName,
-                    Artist = existingArtist,
-                    SongTitle = existingSong,
-                    StreamTitle = existingArtist + " - " + existingSong
-                };
-                metadataSource = "Emby item metadata";
-                _initialDelayCompleted.TryAdd(sessionKey, 0);
-            }
-            else
-            {
-                // First try the low-bandwidth station metadata endpoint; if
-                // that is unavailable, briefly read ICY metadata from the
-                // stream and close the connection after a few metadata blocks.
-                metadata = await _plugin.MetadataReader
-                    .ReadNetworkMetadataAsync(
-                        stationPath,
-                        timeoutSeconds: 5,
-                        allowDirectIcy: _plugin.Configuration.EnableDirectIcyFallback,
-                        ignoreMetadataPhrase: _plugin.CurrentTrackService.IsMetadataPhraseIgnored)
-                    .ConfigureAwait(false);
-
-                var hasNetworkMetadata = string.IsNullOrWhiteSpace(metadata.Error) &&
-                    (!string.IsNullOrWhiteSpace(metadata.Artist) ||
-                     !string.IsNullOrWhiteSpace(metadata.SongTitle));
-
-                if (hasNetworkMetadata)
-                {
-                    metadataSource = "Station HTTP/ICY";
-                    _logger.Info("Usable radio metadata was obtained from the station HTTP/ICY path.");
-                    _initialDelayCompleted.TryAdd(sessionKey, 0);
-                }
-                else
-                {
-                    _logger.Info("Station HTTP/ICY metadata was unusable; trying the FFprobe fallback.");
-                    _plugin.DiagnosticEvents.Record(stationName, "Metadata pipeline", "fallback", string.Empty, string.Empty,
-                        "HTTP/ICY returned no usable title; falling back to FFprobe.");
-                    // Only delay FFprobe on the initial attempt. Network
-                    // metadata is checked first so successful stations do not
-                    // wait 10 seconds. Later progress events can retry readers.
-                    if (needsInitialDelay)
-                    {
-                        var delaySeconds = _plugin.GetFfprobeDelaySeconds();
-                        if (delaySeconds > 0)
-                        {
-                            await Task.Delay(TimeSpan.FromSeconds(delaySeconds))
-                                .ConfigureAwait(false);
-                        }
-                    }
-
-                    beforeProbe = session.GetPlaySessionInfo(sessionKey)
-                        ?? originalPlaySession;
-                    if (!SessionStillUsesStation(beforeProbe, stationPath))
-                    {
-                        return;
-                    }
-
-                    // Re-check Emby metadata after the delay; it may have
-                    // appeared while playback was warming up.
-                    if (TryGetExistingArtistAndSong(
-                            stationName,
-                            beforeProbe.NowPlayingItem,
-                            out existingArtist,
-                            out existingSong) ||
-                        TryGetExistingArtistAndSong(
-                            stationName,
-                            beforeProbe.FullNowPlayingItem,
-                            out existingArtist,
-                            out existingSong))
-                    {
-                        metadata = new RadioStationMetadata
-                        {
-                            StationName = stationName,
-                            Artist = existingArtist,
-                            SongTitle = existingSong,
-                            StreamTitle = existingArtist + " - " + existingSong
-                        };
-                        metadataSource = "Emby item metadata";
-                    }
-                    else
-                    {
-                        metadata = _plugin.MetadataReader.Read(
-                            stationPath,
-                            _plugin.GetFfprobePath(),
-                            ignoreMetadataPhrase: _plugin.CurrentTrackService.IsMetadataPhraseIgnored);
-                        metadataSource = "FFprobe";
-                        if (string.IsNullOrWhiteSpace(metadata.Error) &&
-                            RadioMetadataReader.IsUsableStreamTitle(metadata.SongTitle))
-                        {
-                            _logger.Info("Usable radio metadata was obtained from the FFprobe fallback.");
-                        }
-                    }
-
-                    _initialDelayCompleted.TryAdd(sessionKey, 0);
-                }
-            }
-
-            // Re-check after awaited network/FFprobe work in case StationOnly was
-            // enabled while a lookup already in flight was finishing.
-            if (_plugin.CurrentTrackService.IsStationMetadataLookupDisabled(stationName, session.DeviceName))
-            {
-                ClearSessionTrackMetadata(session, originalPlaySession, sessionKey, stationPath);
-                return;
-            }
-
-            // All sources flow through one canonical validator/state service.
-            // The service applies StationOnly/ignore rules, stores accepted
-            // current-track state, and decides when a changed track merits a
-            // history entry. It hands accepted values to the active Emby session
-            // as machine-readable ProviderIds only; Emby Web controls presentation.
-            var fullArtist = (metadata.Artist ?? string.Empty).Trim();
-            var fullSong = (metadata.SongTitle ?? string.Empty).Trim();
-            var playSession = session.GetPlaySessionInfo(sessionKey)
-                ?? originalPlaySession;
-            RadioCurrentTrack? currentTrack = null;
-            var shouldRecordHistory = false;
-            var accepted = false;
-            var isWaitingForStabilityDelay = false;
-            var sessionMetadataPublished = false;
-            var rejectionReason = string.Empty;
-
-            lock (playSession)
-            {
-                var item = playSession.NowPlayingItem;
-                if (item is null || !SessionStillUsesStation(playSession, stationPath))
-                {
-                    _plugin.CurrentTrackService.MarkUnavailable(sessionKey);
-                    return;
-                }
-
-                accepted = _plugin.CurrentTrackService.TryAcceptTrack(
-                    sessionKey,
-                    stationName,
-                    fullArtist,
-                    fullSong,
-                    metadataSource,
-                    metadata.Error,
-                    metadata.StreamTitle,
-                    session.DeviceName,
-                    out currentTrack,
-                    out rejectionReason,
-                    out shouldRecordHistory,
-                    out isWaitingForStabilityDelay);
-
-                if (accepted && currentTrack is not null)
-                {
-                    sessionMetadataPublished = _plugin.CurrentTrackService
-                        .TryPublishToSessionItem(item, currentTrack);
-                }
-                else if (!isWaitingForStabilityDelay)
-                {
-                    // While a candidate is within its configured stability
-                    // window, keep the last accepted session title published.
-                    // A real rejection still clears stale injected metadata.
-                    _plugin.CurrentTrackService.ClearPublishedMetadata(item, sessionKey);
-                }
-            }
-
-            if (!accepted || currentTrack is null)
-            {
-                var candidateTitle = !string.IsNullOrWhiteSpace(fullSong)
-                    ? fullSong
-                    : (metadata.StreamTitle ?? string.Empty);
-                var diagnosticStatus = isWaitingForStabilityDelay
-                    ? "waiting"
-                    : rejectionReason.Contains("ignore phrase", StringComparison.OrdinalIgnoreCase)
-                        ? "filtered"
-                        : string.IsNullOrWhiteSpace(candidateTitle) ? "empty" : "rejected";
-                _plugin.DiagnosticEvents.Record(
-                    stationName,
-                    metadataSource,
-                    diagnosticStatus,
-                    candidateTitle,
-                    fullArtist,
-                    string.IsNullOrWhiteSpace(rejectionReason) ? "Candidate was not accepted as the current track." : rejectionReason,
-                    metadata.StreamTitle);
-                _logger.Info(
-                    isWaitingForStabilityDelay
-                        ? "Radio metadata candidate is waiting for its station stability delay: {0}"
-                        : "Radio metadata candidate was not accepted as the current track: {0}",
-                    string.IsNullOrWhiteSpace(rejectionReason) ? "candidate rejected" : rejectionReason);
-                return;
-            }
-
-            _plugin.DiagnosticEvents.Record(
-                stationName,
-                currentTrack.Source,
-                "accepted",
-                currentTrack.SongTitle,
-                currentTrack.Artist,
-                sessionMetadataPublished
-                    ? "Candidate passed validation and was published to the Emby session."
-                    : "Candidate passed validation, but publishing to the Emby session failed.",
-                metadata.StreamTitle);
-
-            if (sessionMetadataPublished)
-            {
-                _logger.Info(
-                    "Canonical radio track metadata was published to the active session (source: {0}).",
-                    currentTrack.Source);
-            }
-            else
-            {
-                _plugin.DiagnosticEvents.Record(stationName, currentTrack.Source, "error", currentTrack.SongTitle, currentTrack.Artist,
-                    "The active session item did not expose a writable ProviderIds dictionary.", metadata.StreamTitle);
-                _logger.Error(
-                    "Could not publish canonical radio track metadata: the active session item does not expose a writable ProviderIds dictionary.");
-            }
-
-            if (_plugin.CurrentTrackService.RecordAcceptedTrack(currentTrack, shouldRecordHistory))
-            {
-                _logger.Info("Radio play history recorded one track from the canonical current-track service.");
-            }
-        }
-        catch (Exception ex)
-        {
-            _plugin.DiagnosticEvents.Record("", "Session pipeline", "error", string.Empty, string.Empty,
-                "Radio session metadata update failed (" + ex.GetType().Name + ").");
-            _logger.Error(
-                "Radio session metadata update failed ({0}).",
-                ex.GetType().Name);
-        }
-        finally
-        {
-            _pendingUpdates.TryRemove(sessionKey, out _);
-        }
-    }
-
-
-    private bool TryGetExistingArtistAndSong(
-        string stationName,
-        object? item,
-        out string artist,
-        out string song)
-    {
-        artist = string.Empty;
-        song = string.Empty;
-
-        if (item is null || _plugin.CurrentTrackService.HasPublishedRadioMetaMetadata(item))
-        {
-            // Do not re-read Radio Meta's own published metadata as if it were
-            // source metadata. Source readers remain responsible for track updates.
-            return false;
-        }
-
-        artist = ReadMetadataProperty(item, "Artists", allowCollection: true);
-        if (artist.Length == 0)
-        {
-            artist = ReadMetadataProperty(item, "ArtistItems", allowCollection: true);
-        }
-        if (artist.Length == 0)
-        {
-            artist = ReadMetadataProperty(item, "AlbumArtist", allowCollection: false);
-        }
-        if (artist.Length == 0)
-        {
-            artist = ReadMetadataProperty(item, "AlbumArtists", allowCollection: true);
-        }
-
-        song = ReadMetadataProperty(item, "OriginalTitle", allowCollection: false);
-        if (song.Length == 0)
-        {
-            song = ReadMetadataProperty(item, "TrackName", allowCollection: false);
-        }
-        if (song.Length == 0)
-        {
-            song = ReadMetadataProperty(item, "SongTitle", allowCollection: false);
-        }
-
-        return artist.Length > 0 && song.Length > 0 &&
-            !_plugin.CurrentTrackService.IsMetadataPhraseIgnored(stationName, song) &&
-            !_plugin.CurrentTrackService.IsMetadataPhraseIgnored(stationName, artist + " - " + song);
-    }
-
-    private static string ReadMetadataProperty(
-        object item,
-        string propertyName,
-        bool allowCollection)
-    {
-        try
-        {
-            var property = item.GetType().GetProperty(propertyName);
-            var value = property?.GetValue(item);
-            if (value is string text)
-            {
-                return text.Trim();
-            }
-
-            if (allowCollection && value is IEnumerable values)
-            {
-                foreach (var entry in values)
-                {
-                    if (entry is string entryText && !string.IsNullOrWhiteSpace(entryText))
-                    {
-                        return entryText.Trim();
-                    }
-
-                    if (entry is not null)
-                    {
-                        var nameProperty = entry.GetType().GetProperty("Name");
-                        var name = nameProperty?.GetValue(entry) as string;
-                        if (!string.IsNullOrWhiteSpace(name))
-                        {
-                            return name.Trim();
-                        }
-                    }
-                }
-            }
-        }
-        catch
-        {
-            // Metadata is optional; fall back to FFprobe if the DTO does not
-            // expose one of these properties on this Emby version.
-        }
-
-        return string.Empty;
-    }
-
-    private void ClearSessionTrackMetadata(
-        SessionInfo session,
-        PlaySessionInfo originalPlaySession,
-        string sessionKey,
-        string stationPath)
-    {
-        _plugin.CurrentTrackService.MarkUnavailable(sessionKey);
-        var liveSession = session.GetPlaySessionInfo(sessionKey) ?? originalPlaySession;
-        lock (liveSession)
-        {
-            var currentItem = liveSession.NowPlayingItem;
-            if (currentItem is not null && SessionStillUsesStation(liveSession, stationPath))
-            {
-                _plugin.CurrentTrackService.ClearPublishedMetadata(currentItem, sessionKey);
+                if (_stationResolver.PathsEqual(candidate.Path!, stationPath) && !ReferenceEquals(candidate.Item, liveItem))
+                    _plugin.CurrentTrackService.ClearPublishedMetadata(candidate.Item, sessionKey);
             }
         }
     }
@@ -590,11 +248,11 @@ public sealed class RadioMetaSessionTitleInjector : IDisposable
                 return;
             }
 
-            _pendingUpdates.TryRemove(sessionKey, out _);
-            _initialDelayCompleted.TryRemove(sessionKey, out _);
+            _sessionState.FinishMetadataUpdate(sessionKey);
+            _sessionState.ResetInitialDelay(sessionKey);
+            _sessionState.ClearStationOnlySkip(sessionKey);
             _plugin.CurrentTrackService.EndSession(sessionKey);
-
-            _sessionStations.TryRemove(sessionKey, out _);
+            _sessionState.TryRemoveStation(sessionKey, out _);
         }
         catch (Exception ex)
         {
@@ -602,139 +260,6 @@ public sealed class RadioMetaSessionTitleInjector : IDisposable
                 "Radio title injector stop handler failed ({0}).",
                 ex.GetType().Name);
         }
-    }
-
-    private string? ResolveStationPath(string? path, object? item)
-    {
-        if (string.IsNullOrWhiteSpace(path) || !IsStrmPath(path))
-        {
-            return null;
-        }
-
-        try
-        {
-            var normalizedPath = NormalizePath(path);
-            if (!File.Exists(normalizedPath))
-            {
-                return null;
-            }
-
-            var configuredFolder = _plugin.GetConfiguredStationFolder();
-            if (configuredFolder.Length == 0)
-            {
-                // In automatic mode only classify an item as a radio station
-                // when Emby identifies the active .strm library item as Audio.
-                // This avoids claiming arbitrary movie/TV .strm files.
-                return IsAudioMediaItem(item) ? normalizedPath : null;
-            }
-
-            var folder = _plugin.GetStationFolder();
-            if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
-            {
-                return null;
-            }
-
-            var normalizedFolder = NormalizePath(folder);
-            var relative = Path.GetRelativePath(normalizedFolder, normalizedPath);
-
-            if (Path.IsPathRooted(relative) ||
-                relative.Equals("..", StringComparison.Ordinal) ||
-                relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
-                relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
-            {
-                return null;
-            }
-
-            return normalizedPath;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static bool IsAudioMediaItem(object? item)
-    {
-        if (item is null)
-        {
-            return false;
-        }
-
-        // Reflection intentionally avoids binding this check to one specific
-        // Emby DTO/BaseItem implementation. Both expose MediaType in supported
-        // versions, and its Audio enum/string representation is stable.
-        try
-        {
-            var mediaTypeProperty = item.GetType().GetProperty("MediaType");
-            var mediaType = mediaTypeProperty?.GetValue(item)?.ToString();
-            if (!string.IsNullOrWhiteSpace(mediaType))
-            {
-                return string.Equals(mediaType, "Audio", StringComparison.OrdinalIgnoreCase);
-            }
-
-            var typeProperty = item.GetType().GetProperty("Type");
-            var itemType = typeProperty?.GetValue(item)?.ToString();
-            return string.Equals(itemType, "Audio", StringComparison.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static bool SessionStillUsesStation(
-        PlaySessionInfo playSession,
-        string stationPath)
-    {
-        var paths = new[]
-        {
-            playSession.NowPlayingItem?.Path,
-            playSession.FullNowPlayingItem?.Path
-        }
-        .Where(path => !string.IsNullOrWhiteSpace(path))
-        .ToArray();
-
-        return paths.Any(path => PathsEqual(path!, stationPath));
-    }
-
-    private static bool IsStrmPath(string path) =>
-        Path.GetExtension(path).Equals(
-            ".strm",
-            StringComparison.OrdinalIgnoreCase);
-
-    private static bool PathsEqual(string first, string second)
-    {
-        try
-        {
-            return string.Equals(
-                NormalizePath(first),
-                NormalizePath(second),
-                StringComparison.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static string NormalizePath(string path)
-    {
-        var value = path.Trim();
-
-        if (value.StartsWith(
-            @"\\?\UNC\",
-            StringComparison.OrdinalIgnoreCase))
-        {
-            value = @"\\" + value.Substring(8);
-        }
-        else if (value.StartsWith(
-            @"\\?\",
-            StringComparison.OrdinalIgnoreCase))
-        {
-            value = value.Substring(4);
-        }
-
-        return Path.GetFullPath(value);
     }
 
     public void Dispose()
@@ -747,8 +272,6 @@ public sealed class RadioMetaSessionTitleInjector : IDisposable
             _started = false;
         }
 
-        _sessionStations.Clear();
-        _pendingUpdates.Clear();
-        _initialDelayCompleted.Clear();
+        _sessionState.Clear();
     }
 }

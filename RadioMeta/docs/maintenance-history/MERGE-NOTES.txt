@@ -1,0 +1,53 @@
+RADIO META v1.3.98 — MERGE NOTES
+================================
+
+Merge base
+----------
+This package uses the last identified v1.3 source ZIP:
+RadioMeta-v1.3.97-Stream-Capture-Paste-Import-Experimental-Source.zip
+
+The proxy/security donor is the source package tested in the separate v1.7 line:
+RadioMeta-v1.7.9-Security-Performance-Hardening-Source.zip
+
+Versioning
+----------
+The project version is incremented to 1.3.98. AssemblyName and RootNamespace
+remain RadioMeta. Plugin.cs retains GUID 8a7f6e31-9d42-4b85-a103-72c6f0e54b19,
+and the config template remains
+8a7f6e31-9d42-4b85-a103-72c6f0e54b19.xml.example.
+
+Merge approach
+--------------
+Unchanged v1.3.97 source files were retained. Source files changed in the v1.7.9
+donor were overlaid selectively, and new proxy/hardening source files were added.
+The WebLoader payload and installer/restore scripts match the v1.3.97 baseline.
+The dashboard bundle was synchronized with the current 15 ordered dashboard
+source sections.
+
+Included changes
+----------------
+- Optional FFmpeg proxy for selected .strm stations and immediate per-station
+  proxy on/off control.
+- Targeted library refresh on Create .strm, successful Save changes, and proxy
+  enable/disable.
+- Proxy-enabled station edit lock enforced in both dashboard and API.
+- Admin-role requirements for management/configuration APIs, while preserving
+  authenticated-only CurrentTracks access for dashboard/player compatibility.
+- Proxy client/process limits, bounded reads, URL/sidecar validation, safer
+  public-host logo downloading, sanitized FFmpeg logging, and bounded metadata
+  caches.
+
+Checks performed in this environment
+------------------------------------
+- All JavaScript files passed Node.js syntax checks.
+- RadioMetaDashboard.js exactly matches concatenation of its 15 source sections.
+- Plugin GUID, config template filename, and 1.3.98 project version checked.
+- SHA256 manifest entries and ZIP contents/integrity checked.
+
+Checks still required on the Windows Emby host
+----------------------------------------------
+No .NET SDK / Emby build environment is available in this environment, so C#
+compilation and live Emby end-to-end tests have not been performed. Build with
+the target server's Emby assemblies before installing. Verify normal metadata,
+station create/edit/delete, library refresh, direct playback, proxy playback,
+proxy disable/enable, non-admin denial, and display/WebLoader behavior.

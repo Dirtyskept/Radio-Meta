@@ -1,0 +1,249 @@
+        function getModeStation(rule) {
+            return String(getValue(rule, 'StationName', 'stationName') || '').trim();
+        }
+
+        function getStationMode(rule) {
+            var mode = String(getValue(rule, 'Mode', 'mode') || 'Automatic').trim().toLowerCase();
+            if (mode === 'stationonly') return 'StationOnly';
+            if (mode === 'stationdelay') return 'StationDelay';
+            if (mode === 'carplay') return 'Carplay';
+            return 'Automatic';
+        }
+
+        function getStationModeDelaySeconds(rule) {
+            var value = Number(getValue(rule, 'MetadataDelaySeconds', 'metadataDelaySeconds'));
+            return Number.isFinite(value) ? Math.max(0, Math.min(30, Math.floor(value))) : 0;
+        }
+
+        function getStationModeTargetDevice(rule) {
+            return String(getValue(rule, 'MetadataDelayDeviceName', 'metadataDelayDeviceName') || '').trim();
+        }
+
+        function renderStationModeRules() {
+            var container = view.querySelector('#radioStationModeRules');
+            if (!container) {
+                return;
+            }
+
+            container.replaceChildren();
+            var rules = stationModeRules.slice().sort(function (a, b) {
+                return getModeStation(a).localeCompare(getModeStation(b));
+            });
+
+            if (!rules.length) {
+                addText(container, 'radio-ignore-empty',
+                    'No station/device rules saved. Unmatched playback uses Automatic mode with no metadata delay.');
+                return;
+            }
+
+            rules.forEach(function (rule) {
+                var station = getModeStation(rule);
+                var mode = getStationMode(rule);
+                var delaySeconds = getStationModeDelaySeconds(rule);
+                var targetDevice = getStationModeTargetDevice(rule);
+                var row = document.createElement('div');
+                row.className = 'radio-station-mode-row';
+
+                var details = document.createElement('div');
+                details.className = 'radio-station-mode-details';
+                addText(details, 'radio-station-mode-name', station, 'strong');
+                addText(details, 'radio-station-mode-scope', 'Station / Device: ' + station);
+                var modeDescription = mode === 'StationOnly'
+                    ? 'Disable metadata — no track metadata lookups are performed.'
+                    : mode === 'StationDelay'
+                        ? 'Station delay — shows the first valid current song immediately on entry, then delays later song/artist changes.'
+                        : mode === 'Carplay'
+                            ? 'Carplay — existing device behavior; clears old song metadata on station changes.'
+                            : 'Automatic — uses normal track metadata lookups.';
+                var delayDescription = mode === 'StationOnly'
+                    ? (delaySeconds > 0
+                        ? 'Configured delay is ignored because metadata lookups are disabled.'
+                        : 'Metadata lookups and delay are disabled.')
+                    : delaySeconds === 0
+                        ? 'Metadata delay: off.'
+                        : 'Metadata delay: ' + delaySeconds + ' second(s). A changed candidate restarts the timer.';
+                var legacyTargetDescription = targetDevice
+                    ? ' Existing station rule is limited to ' + targetDevice + '.'
+                    : '';
+                addText(details, 'radio-station-mode-description', modeDescription + ' ' + delayDescription + legacyTargetDescription);
+                row.appendChild(details);
+
+                var remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'emby-button raised radio-station-mode-remove';
+                remove.textContent = 'Remove rule';
+                remove.setAttribute('data-station-mode-remove', station);
+                remove.setAttribute('aria-label', 'Remove metadata mode rule for ' + station);
+                remove.disabled = stationModeSaveInProgress;
+                row.appendChild(remove);
+                container.appendChild(row);
+            });
+        }
+
+        function loadStationModes() {
+            var status = view.querySelector('#radioStationModeStatus');
+            if (!status || stationModeRequestInProgress) {
+                return;
+            }
+
+            stationModeRequestInProgress = true;
+            status.textContent = 'Loading station/device metadata settings...';
+
+            ApiClient.getJSON(ApiClient.getUrl('RadioMeta/StationModes'))
+                .then(function (data) {
+                    var error = getValue(data, 'Error', 'error');
+                    if (error) {
+                        status.textContent = error;
+                        return;
+                    }
+
+                    stationModeRules = getValue(data, 'Rules', 'rules') || [];
+                    renderStationModeRules();
+                    status.textContent = stationModeRules.length
+                        ? stationModeRules.length + ' saved station/device rule(s). Unmatched playback uses Automatic mode with no metadata delay.'
+                        : 'No saved station/device rules. Unmatched playback uses Automatic mode with no metadata delay by default.';
+                })
+                .catch(function (error) {
+                    status.textContent = 'Unable to load station/device metadata settings: ' +
+                        (error && error.message ? error.message : String(error));
+                    console.error('Radio Meta station metadata settings:', error);
+                })
+                .finally(function () {
+                    stationModeRequestInProgress = false;
+                });
+        }
+
+        function saveStationModeRules(nextRules, station, mode, delaySeconds, targetDevice, successMessage, clearStationInput) {
+            var status = view.querySelector('#radioStationModeStatus');
+            var addButton = view.querySelector('#radioStationModeAdd');
+            if (!status || stationModeSaveInProgress) {
+                return;
+            }
+
+            var previousRules = stationModeRules;
+            stationModeRules = nextRules;
+            stationModeSaveInProgress = true;
+            if (addButton) {
+                addButton.disabled = true;
+            }
+            renderStationModeRules();
+            status.textContent = 'Saving metadata rule for ' + station + '...';
+
+            ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('RadioMeta/StationModes'),
+                data: JSON.stringify({ Rules: nextRules }),
+                contentType: 'application/json'
+            }).then(function (data) {
+                var error = getValue(data, 'Error', 'error');
+                if (error) {
+                    stationModeRules = previousRules;
+                    status.textContent = error;
+                    return;
+                }
+
+                stationModeRules = getValue(data, 'Rules', 'rules') || nextRules;
+                renderStationModeRules();
+                var savedMessage = successMessage || (mode === 'StationOnly'
+                    ? 'Metadata disabled for ' + station + '. Track metadata lookups are skipped.'
+                    : mode === 'StationDelay'
+                        ? 'Station delay saved for ' + station + '. The first valid current song is immediate; later changes use the configured delay.'
+                        : mode === 'Carplay'
+                            ? 'Carplay saved for ' + station + '. Existing Carplay transition behavior is unchanged; the selected delay controls updated song metadata.'
+                            : 'Automatic saved for ' + station + '. Normal metadata lookup is enabled.');
+                status.textContent = savedMessage +
+                    (mode === 'StationOnly'
+                        ? ' The delay value is ignored while metadata lookup is disabled.'
+                        : delaySeconds > 0
+                            ? ' Metadata delay: ' + delaySeconds + ' second(s). The identifier is matched against station titles and Emby device names.'
+                            : ' Metadata delay is off.');
+                if (clearStationInput) {
+                    var input = view.querySelector('#radioStationModeName');
+                    var modeSelect = view.querySelector('#radioStationModeValue');
+                    var delaySelect = view.querySelector('#radioStationModeDelay');
+                    if (input) {
+                        input.value = '';
+                    }
+                    if (modeSelect) modeSelect.value = 'Automatic';
+                    if (delaySelect) delaySelect.value = '0';
+                }
+            }).catch(function (error) {
+                stationModeRules = previousRules;
+                renderStationModeRules();
+                status.textContent = 'Unable to save station metadata settings: ' +
+                    (error && error.message ? error.message : String(error));
+                console.error('Radio Meta station metadata save:', error);
+            }).finally(function () {
+                stationModeSaveInProgress = false;
+                if (addButton) {
+                    addButton.disabled = false;
+                }
+                renderStationModeRules();
+            });
+        }
+
+        function addStationModeRule() {
+            var input = view.querySelector('#radioStationModeName');
+            var modeSelect = view.querySelector('#radioStationModeValue');
+            var delaySelect = view.querySelector('#radioStationModeDelay');
+            var status = view.querySelector('#radioStationModeStatus');
+            if (!input || !modeSelect || !delaySelect || !status) {
+                return;
+            }
+
+            var station = input.value.trim();
+            var mode = modeSelect.value === 'StationOnly' ? 'StationOnly' : (modeSelect.value === 'StationDelay' ? 'StationDelay' : (modeSelect.value === 'Carplay' ? 'Carplay' : 'Automatic'));
+            var delaySeconds = Math.max(0, Math.min(30, Number(delaySelect.value) || 0));
+            var existingTargetDevice = stationModeRules.find(function (rule) {
+                return getModeStation(rule).toLowerCase() === station.toLowerCase();
+            });
+            // Preserve the optional target device from older saved rules until that rule is removed.
+            var targetDevice = existingTargetDevice ? getStationModeTargetDevice(existingTargetDevice) : '';
+            if (!station) {
+                status.textContent = 'Enter a .strm station title or an exact Emby device name.';
+                input.focus();
+                return;
+            }
+
+            var existing = stationModeRules.find(function (rule) {
+                return getModeStation(rule).toLowerCase() === station.toLowerCase();
+            });
+            if (existing && getStationMode(existing) === mode &&
+                getStationModeDelaySeconds(existing) === delaySeconds &&
+                getStationModeTargetDevice(existing).toLowerCase() === targetDevice.toLowerCase()) {
+                status.textContent = 'That station/device rule already has these settings saved.';
+                return;
+            }
+            if (!existing && stationModeRules.length >= 100) {
+                status.textContent = 'You have reached the limit of 100 station/device rules.';
+                return;
+            }
+
+            var nextRules = stationModeRules.filter(function (rule) {
+                return getModeStation(rule).toLowerCase() !== station.toLowerCase();
+            });
+            nextRules.push({
+                StationName: station,
+                Mode: mode,
+                MetadataDelaySeconds: delaySeconds,
+                MetadataDelayDeviceName: targetDevice
+            });
+            saveStationModeRules(nextRules, station, mode, delaySeconds, targetDevice,
+                'Station/device rule saved to the plugin XML.', true);
+        }
+
+        function removeStationModeRule(station) {
+            if (stationModeSaveInProgress) {
+                return;
+            }
+            var normalizedStation = String(station || '').trim();
+            var nextRules = stationModeRules.filter(function (rule) {
+                return getModeStation(rule).toLowerCase() !== normalizedStation.toLowerCase();
+            });
+            if (nextRules.length === stationModeRules.length) {
+                return;
+            }
+            saveStationModeRules(nextRules, normalizedStation, 'Automatic', 0, '',
+                'Saved rule removed. Matching playback uses Automatic mode with no metadata delay unless another rule applies.', false);
+        }
+

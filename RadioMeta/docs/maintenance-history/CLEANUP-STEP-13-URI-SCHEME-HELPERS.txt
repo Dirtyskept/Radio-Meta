@@ -1,0 +1,35 @@
+RADIO META v1.3.114 — SHARED URI SCHEME CHECKS
+================================================
+
+Purpose
+-------
+Reduce repeated, identical URL-scheme predicates in station discovery and metadata input validation, without collapsing the separate security policies that surround those checks.
+
+Changes
+-------
+- Added RadioMetaUriSchemeHelpers with two simple predicates: HTTP/HTTPS, and HTTP/HTTPS/ICY.
+- Reused those predicates at existing call sites whose scheme conditions were identical, including stream URL discovery, artwork URL checks, metadata testing, and station-file URL classification.
+- Updated the plugin and dashboard version marker to 1.3.114 and regenerated RadioMetaDashboard.js from the same 15 readable source sections.
+- Retained the v1.3.113 HTML-entity normalization and saved-title correction normalization.
+
+Safety boundary preserved
+-------------------------
+These helpers classify schemes only. They do not decide whether a URL is safe. Caller-specific checks for credentials, sensitive query parameters, forbidden Emby paths, public DNS/IP destinations, redirects, artwork file types, proxy-local endpoints, and sidecar tokens remain where they were. The proxy request/service files were intentionally not refactored in this step.
+
+Intentionally unchanged
+-----------------------
+- No metadata parsing, station transitions, StationOnly behavior, caches, timeouts, ICY interval limit, or network lookup sequence changed.
+- No proxy playback, station create/edit/delete, library refresh, display integration, or saved correction behavior was intentionally changed.
+- WebLoader and all its files remain byte-for-byte unchanged.
+- Plugin GUID and configuration XML filename remain unchanged.
+- No minification or .NET trimming was performed.
+
+Verification performed
+----------------------
+- Source diff reviewed to ensure the new helper wraps the exact existing scheme comparisons and leaves the surrounding validation predicates in place.
+- Dashboard bundle regenerated from all 15 source sections and checked for the 1.3.114 marker.
+- JavaScript syntax checks, WebLoader byte-identity checks, ZIP integrity, and SHA256 manifest verification performed during package creation.
+
+Limits
+------
+This is not a C# compilation or live Emby test. Build on Windows and run the README regression checks before installing.

@@ -1,0 +1,30 @@
+RADIO META v1.3.115 — PLUGIN THUMBNAIL OPTIMIZATION
+==================================================
+
+Scope
+-----
+This is a low-risk embedded-resource size cleanup. It changes only the JPEG encoding of RadioMeta/thumb.jpg, the image shown in Emby's plugin listing.
+
+Change
+------
+- Original image: 800×300 JPEG, 22,994 bytes.
+- Optimized image: 800×300 progressive JPEG, 19,371 bytes.
+- Reduction: 3,623 bytes (about 15.8% of the thumbnail resource).
+- The artwork, aspect ratio, dimensions, and filename are unchanged.
+- A side-by-side visual review found no obvious visible difference at normal display size.
+
+Preserved
+---------
+- No C# code or JavaScript behavior changes were made for this step.
+- v1.3.114 shared URI-scheme helpers are retained.
+- v1.3.113 HTML-entity title normalization and saved-title matching are retained.
+- The dashboard controller was regenerated from its 15 readable source sections with marker 1.3.115 to keep plugin/dashboard versions aligned.
+- All WebLoader files remain unchanged.
+
+Verification
+------------
+- Thumbnail dimensions and file size checked.
+- Dashboard bundle regenerated from all 15 source sections and checked for required markers.
+- All JavaScript files passed Node.js syntax checking.
+- ZIP archive integrity and source SHA256 manifest verified.
+- No .NET build or live Emby test was performed in this authoring environment.

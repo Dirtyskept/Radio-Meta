@@ -1,0 +1,46 @@
+Radio Meta v1.3.103 — Metadata Capture Guardrail Diagnostic
+
+Purpose
+-------
+This release adds visibility to the diagnostic report so future cleanup work does not
+accidentally make live radio metadata less reliable while trying to improve speed.
+
+What the diagnostic now reports
+-------------------------------
+- Automatic live metadata currently uses up to 5 seconds for the Shoutcast stage.
+- If that stage does not return a usable title, direct ICY fallback gets its own
+  separate timeout of up to 5 seconds.
+- The direct ICY reader examines up to 40 metadata intervals and returns early when it
+  finds a usable song title.
+- The manual stream-test button has its own separate overall limit of up to 30 seconds.
+- Whether the direct ICY fallback setting is currently enabled.
+
+Important distinction
+--------------------
+The Shoutcast negative cache added in v1.3.102 remembers explicit unsupported-endpoint
+responses (such as HTTP 404/405/410) briefly to avoid repeated delays. It does not
+shorten the ICY timeout or lower the 40-interval limit. Keep those behaviors separate.
+
+Maintenance rule
+----------------
+Do not lower the live metadata timeout or reduce the ICY interval limit solely to improve
+speed. First test metadata success and timing with several stations, especially stations
+with delayed or intermittent metadata such as Affinity Radio. Compare artist/title
+extraction as well as whether any title was received. A received title without an artist
+may be a parsing issue, not a capture-duration issue.
+
+Changes in this build
+---------------------
+- Added live timeout, manual-test timeout, interval limit, and ICY-enabled state to the
+  administrator-only diagnostics health response.
+- Added a plain-language diagnostic guardrail and updated the ICY sampling note.
+- Centralized existing timeout values as constants; the operational values are unchanged.
+- Updated version to 1.3.103 and rebuilt the dashboard from its 15 source sections.
+- No metadata timing, fallback decision, station display, proxy, or WebLoader behavior
+  was intentionally changed.
+
+Verification performed here
+---------------------------
+- Generated dashboard matches the ordered 15 source sections.
+- JavaScript syntax check and ZIP/hash integrity checks are to be run before packaging.
+- C# compilation and live Emby testing have not been performed in this environment.

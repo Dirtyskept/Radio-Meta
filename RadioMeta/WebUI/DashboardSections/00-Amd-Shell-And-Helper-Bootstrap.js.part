@@ -1,0 +1,90 @@
+define([], function () {
+    'use strict';
+
+    window.__radioMetaDashboardControllerInfo_v1382 = {
+        version: '1.3.126',
+        initialized: true,
+        sourceMode: 'bundled-source-sections',
+        sections: [
+            'amd-shell-and-helper-bootstrap',
+            'controller-entry-and-common-helpers',
+            'station-folder-panel',
+            'play-history-panel',
+            'station-mode-settings-panel',
+            'ignore-phrases-panel',
+            'saved-title-fixes-panel',
+            'history-actions-and-path-settings',
+            'view-lifecycle-and-station-creation',
+            'diagnostic-probes-and-helpers',
+            'diagnostic-renderer',
+            'diagnostic-runner',
+            'diagnostic-copy-and-fallback',
+            'current-playback-and-stream-test-helpers',
+            'current-station-form-and-controller-wiring'
+        ]
+    };
+
+    function ensureIntegratedDisplayHelperForDashboard() {
+        var helperKey = '__radioMetaIntegratedDisplay_v1323';
+        var loaderStateKey = '__radioMetaDisplayLoaderState_v1366';
+        var pendingKey = '__radioMetaDashboardHelperImportPending';
+        if (window[helperKey] === true) {
+            window[loaderStateKey] = 'loaded';
+            try { delete window.__radioMetaDisplayLoaderError; } catch (ignore) {}
+            return;
+        }
+        if (window[pendingKey]) return;
+
+        var pathname = String(window.location && window.location.pathname || '/');
+        var lowerPath = pathname.toLowerCase();
+        var webPosition = lowerPath.lastIndexOf('/web/');
+        var basePath = webPosition >= 0 ? pathname.slice(0, webPosition) : '';
+        if (webPosition < 0 && /\/web$/i.test(pathname)) basePath = pathname.slice(0, -4);
+        var helperPath = basePath + '/web/ConfigurationPage?name=RadioMetaIntegratedDisplay.js';
+        var amdRequire = window.require;
+        var emby = window.Emby;
+
+        if (!(typeof amdRequire === 'function' && typeof window.define === 'function' && window.define.amd) &&
+            !(emby && typeof emby.importModule === 'function')) {
+            return; // The optional site-wide WebLoader can retry when Emby finishes startup.
+        }
+
+        window[pendingKey] = true;
+        window[loaderStateKey] = 'loading';
+        var finished = false;
+        function finish(error) {
+            if (finished) return;
+            finished = true;
+            window[pendingKey] = false;
+            if (window[helperKey] === true) {
+                window[loaderStateKey] = 'loaded';
+                try { delete window.__radioMetaDisplayLoaderError; } catch (ignore) {}
+                try { delete window.__radioMetaDashboardHelperLoadError; } catch (ignore) {}
+                return;
+            }
+
+            var message = error && error.message ? error.message : (error || 'Module request completed without registering the helper.');
+            message = String(message).replace(/([?&](?:X-Emby-Token|api_key|token)=)[^&\s]+/gi, '$1[REDACTED]');
+            window[loaderStateKey] = 'failed';
+            window.__radioMetaDisplayLoaderError = message.slice(0, 300);
+            window.__radioMetaDashboardHelperLoadError = window.__radioMetaDisplayLoaderError;
+        }
+
+        try {
+            var result;
+            if (typeof amdRequire === 'function' && typeof window.define === 'function' && window.define.amd) {
+                // Same AMD module route verified manually in Emby 4.10.2.0.
+                result = amdRequire([helperPath], function () { finish(); });
+            } else {
+                result = emby.importModule('ConfigurationPage?name=RadioMetaIntegratedDisplay.js');
+            }
+            if (result && typeof result.then === 'function') {
+                Promise.resolve(result).then(function () { finish(); }, function (error) { finish(error); });
+            } else if (!(typeof amdRequire === 'function' && typeof window.define === 'function' && window.define.amd)) {
+                finish();
+            }
+        } catch (error) {
+            finish(error);
+        }
+    }
+

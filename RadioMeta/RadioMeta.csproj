@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>RadioMeta</AssemblyName>
     <RootNamespace>RadioMeta</RootNamespace>
-    <Version>1.3.74</Version>
+    <Version>1.3.126</Version>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -32,9 +32,19 @@
 
   <ItemGroup>
     <EmbeddedResource Include="WebUI\RadioMetaDashboard.html" />
-    <EmbeddedResource Include="WebUI\RadioMetaDashboard-v16.js" />
+    <EmbeddedResource Include="WebUI\RadioMetaDashboard.js" />
     <EmbeddedResource Include="WebUI\RadioMetaDisplayLoader.js" />
     <EmbeddedResource Include="WebUI\RadioMetaIntegratedDisplay.js" />
     <EmbeddedResource Include="thumb.jpg" LogicalName="RadioMeta.thumb.jpg" />
   </ItemGroup>
+
+  <Target Name="BuildRadioMetaIntegratedDisplayBundle" BeforeTargets="PrepareResources">
+    <!-- Source components live in WebUI\DisplayModules; generate the single existing embedded resource before resource compilation. -->
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\Build-DisplayHelper.ps1&quot;" />
+  </Target>
+
+  <Target Name="BuildRadioMetaDashboardControllerBundle" BeforeTargets="PrepareResources">
+    <!-- Build the dashboard controller from source sections before embedding the existing resource. -->
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\Build-DashboardController.ps1&quot;" />
+  </Target>
 </Project>

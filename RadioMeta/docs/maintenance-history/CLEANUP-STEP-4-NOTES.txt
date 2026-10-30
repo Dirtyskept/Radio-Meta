@@ -1,0 +1,71 @@
+RADIO META v1.3.102 — CLEANUP STEP 4: AVOID REPEATED FAILED SHOUTCAST PROBES
+=============================================================================
+
+Why this change was made
+-----------------------
+The v1.3.100/v1.3.101 live diagnostics showed some stations repeatedly returning
+HTTP 404 from the optional Shoutcast /stats and /7.html endpoints. Radio Meta
+then successfully reads song/artist data directly from ICY. These repeated
+failed checks can add noticeable delay before the working ICY fallback runs.
+
+What changed
+------------
+- Radio Meta now remembers an explicit HTTP 404, 405, or 410 for each optional
+  Shoutcast endpoint, keyed by the stream server authority (including port) and
+  by endpoint path.
+- Once such a response occurs, that same endpoint is skipped for up to 10
+  minutes for later lookups against that server. The /stats and /7.html results
+  are remembered separately, so a working endpoint remains available.
+- Direct ICY metadata fallback is still attempted when no usable Shoutcast title
+  is available. Working Shoutcast endpoints still get queried and used normally.
+- Timeouts, network exceptions, 403 responses, and 5xx server errors are not
+  negatively cached, because those may be temporary or access-related failures.
+- The small negative cache is capped at 512 entries. Expired and oldest entries
+  are removed when the cap is exceeded. The existing explicit ClearCaches call
+  clears it as well.
+- Diagnostics say when an endpoint was skipped and why. They do not include the
+  stream URL or host in that message.
+
+What this does not change
+------------------------
+- No station URL, .strm file, proxy, token, logo, or library-refresh behavior was
+  changed.
+- No song/artist parsing, ignore rules, metadata validation, publication, or
+  player display logic was changed.
+- Shoutcast support has not been removed. The negative cache expires after 10
+  minutes, and only explicit unsupported-endpoint HTTP status codes are cached.
+- The manual stream test uses the same helper; its direct ICY fallback still
+  validates redirect destinations as before.
+- No minification was performed. WebLoader files and the stock nowplayingbar.js
+  payload are unchanged; NOWPLAYINGBAR-CHANGES.txt remains unchanged.
+
+Expected effect
+---------------
+The first lookup for a server that rejects both Shoutcast endpoints can still
+pay the initial request cost. Later lookups during the 10-minute window should
+skip the already-failing endpoint requests and reach ICY sooner. Servers that
+supply Shoutcast metadata should behave as before.
+
+Testing requested
+-----------------
+Build this source on the Windows Emby host. Test a station that previously
+showed repeated /stats and /7.html 404s, such as Affinity Radio or Heart 80s:
+1. On the first lookup, a 404 may still occur and should be noted as cached.
+2. On a subsequent uncached lookup, diagnostics should report that the failed
+   endpoint was skipped; ICY should still return the song/artist.
+3. Compare the Shoutcast timing in diagnostics. It should drop substantially for
+   endpoints that were cached as unavailable.
+4. Check a station whose Shoutcast endpoint works, such as Clear Skies Radio in
+   the provided report, and confirm it can still return Shoutcast metadata.
+5. Confirm station switching and normal player display remain correct.
+
+Verification performed in this environment
+------------------------------------------
+- Source and generated dashboard bundle version alignment checked.
+- Dashboard source reassembled in its declared 15-section order.
+- JavaScript syntax check and source/bundle consistency check passed.
+- Static checks confirmed both endpoint calls use the negative cache and ICY
+  fallback remains present.
+- ZIP integrity and SHA256 manifest checked.
+- C# compilation and live HTTP behavior could not be run here because the
+  .NET SDK and user's Emby build assemblies are not available in this environment.
