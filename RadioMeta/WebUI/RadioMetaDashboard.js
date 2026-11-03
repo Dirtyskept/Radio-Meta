@@ -1,12 +1,12 @@
 define([], function () {
     'use strict';
 
-    window.__radioMetaDashboardControllerInfo_v1382 = {
-        version: '1.3.126',
+    window.__radioMetaDashboardControllerInfo_v1328 = {
+        version: '1.3.128',
         initialized: true,
         sourceMode: 'bundled-source-sections',
         sections: [
-            'amd-shell-and-helper-bootstrap',
+            'amd-shell',
             'controller-entry-and-common-helpers',
             'station-folder-panel',
             'play-history-panel',
@@ -24,72 +24,7 @@ define([], function () {
         ]
     };
 
-    function ensureIntegratedDisplayHelperForDashboard() {
-        var helperKey = '__radioMetaIntegratedDisplay_v1323';
-        var loaderStateKey = '__radioMetaDisplayLoaderState_v1366';
-        var pendingKey = '__radioMetaDashboardHelperImportPending';
-        if (window[helperKey] === true) {
-            window[loaderStateKey] = 'loaded';
-            try { delete window.__radioMetaDisplayLoaderError; } catch (ignore) {}
-            return;
-        }
-        if (window[pendingKey]) return;
-
-        var pathname = String(window.location && window.location.pathname || '/');
-        var lowerPath = pathname.toLowerCase();
-        var webPosition = lowerPath.lastIndexOf('/web/');
-        var basePath = webPosition >= 0 ? pathname.slice(0, webPosition) : '';
-        if (webPosition < 0 && /\/web$/i.test(pathname)) basePath = pathname.slice(0, -4);
-        var helperPath = basePath + '/web/ConfigurationPage?name=RadioMetaIntegratedDisplay.js';
-        var amdRequire = window.require;
-        var emby = window.Emby;
-
-        if (!(typeof amdRequire === 'function' && typeof window.define === 'function' && window.define.amd) &&
-            !(emby && typeof emby.importModule === 'function')) {
-            return; // The optional site-wide WebLoader can retry when Emby finishes startup.
-        }
-
-        window[pendingKey] = true;
-        window[loaderStateKey] = 'loading';
-        var finished = false;
-        function finish(error) {
-            if (finished) return;
-            finished = true;
-            window[pendingKey] = false;
-            if (window[helperKey] === true) {
-                window[loaderStateKey] = 'loaded';
-                try { delete window.__radioMetaDisplayLoaderError; } catch (ignore) {}
-                try { delete window.__radioMetaDashboardHelperLoadError; } catch (ignore) {}
-                return;
-            }
-
-            var message = error && error.message ? error.message : (error || 'Module request completed without registering the helper.');
-            message = String(message).replace(/([?&](?:X-Emby-Token|api_key|token)=)[^&\s]+/gi, '$1[REDACTED]');
-            window[loaderStateKey] = 'failed';
-            window.__radioMetaDisplayLoaderError = message.slice(0, 300);
-            window.__radioMetaDashboardHelperLoadError = window.__radioMetaDisplayLoaderError;
-        }
-
-        try {
-            var result;
-            if (typeof amdRequire === 'function' && typeof window.define === 'function' && window.define.amd) {
-                // Same AMD module route verified manually in Emby 4.10.2.0.
-                result = amdRequire([helperPath], function () { finish(); });
-            } else {
-                result = emby.importModule('ConfigurationPage?name=RadioMetaIntegratedDisplay.js');
-            }
-            if (result && typeof result.then === 'function') {
-                Promise.resolve(result).then(function () { finish(); }, function (error) { finish(error); });
-            } else if (!(typeof amdRequire === 'function' && typeof window.define === 'function' && window.define.amd)) {
-                finish();
-            }
-        } catch (error) {
-            finish(error);
-        }
-    }
-
     return function (view) {
-        ensureIntegratedDisplayHelperForDashboard();
         var refreshTimer = null;
         var requestInProgress = false;
         var historyReloadPending = false;
@@ -2336,17 +2271,6 @@ define([], function () {
             return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
         }
 
-        function diagnosticVisible(element) {
-            if (!element || !element.isConnected) return false;
-            var rect = element.getBoundingClientRect();
-            if (rect.width <= 0 || rect.height <= 0) return false;
-            for (var node = element; node && node.nodeType === 1; node = node.parentElement) {
-                var style = window.getComputedStyle(node);
-                if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) === 0) return false;
-            }
-            return true;
-        }
-
         function diagnosticProviderValue(item, wantedName) {
             var providerIds = diagnosticValue(item, 'ProviderIds', 'providerIds');
             if (!providerIds || typeof providerIds !== 'object') return '';
@@ -2370,16 +2294,6 @@ define([], function () {
             message = message.replace(/([?&](?:X-Emby-Token|api_key|access_token|token)=)[^&\s]+/gi, '$1[REDACTED]');
             message = message.replace(/https?:\/\/[^\s'"<>]+/gi, '[URL]');
             return message.slice(0, 220);
-        }
-
-        function diagnosticContainsTrack(text, track, includeStation) {
-            var normalized = diagnosticNormalize(text);
-            if (!normalized || !track || !track.song || !track.artist) return false;
-            if (normalized.indexOf(diagnosticNormalize(track.song)) < 0 ||
-                normalized.indexOf(diagnosticNormalize(track.artist)) < 0) return false;
-            if (includeStation && track.station &&
-                normalized.indexOf(diagnosticNormalize(track.station)) < 0) return false;
-            return true;
         }
 
         function diagnosticGetJson(path, timeoutMs) {
@@ -2408,58 +2322,6 @@ define([], function () {
                     window.clearTimeout(timeout);
                     reject(error || new Error('Request failed'));
                 }
-            });
-        }
-
-        // Probe both known display-resource URLs automatically. The old __plugin
-        // path is diagnostic-only; ConfigurationPage is the supported embedded-resource route.
-        function diagnosticProbeDisplayResources(timeoutMs) {
-            function probe(path) {
-                return new Promise(function (resolve) {
-                    var finished = false;
-                    var timer = window.setTimeout(function () {
-                        if (finished) return;
-                        finished = true;
-                        resolve({ path: path, ok: false, status: 0, contentType: '', bytes: 0, looksLikeModule: false, error: 'Request timed out' });
-                    }, timeoutMs || 6000);
-                    try {
-                        window.fetch(path, { method: 'GET', credentials: 'same-origin', cache: 'no-store' })
-                            .then(function (response) {
-                                return response.text().then(function (body) {
-                                    if (finished) return;
-                                    finished = true;
-                                    window.clearTimeout(timer);
-                                    var contentType = response.headers.get('content-type') || '';
-                                    resolve({
-                                        path: path,
-                                        ok: response.ok,
-                                        status: response.status,
-                                        contentType: contentType,
-                                        bytes: body.length,
-                                        looksLikeModule: /javascript|ecmascript/i.test(contentType) && /define\s*\(/.test(body),
-                                        error: ''
-                                    });
-                                });
-                            })
-                            .catch(function (error) {
-                                if (finished) return;
-                                finished = true;
-                                window.clearTimeout(timer);
-                                resolve({ path: path, ok: false, status: 0, contentType: '', bytes: 0, looksLikeModule: false, error: String(error && error.message ? error.message : error || 'Request failed') });
-                            });
-                    } catch (error) {
-                        if (finished) return;
-                        finished = true;
-                        window.clearTimeout(timer);
-                        resolve({ path: path, ok: false, status: 0, contentType: '', bytes: 0, looksLikeModule: false, error: String(error && error.message ? error.message : error || 'Request failed') });
-                    }
-                });
-            }
-            return Promise.all([
-                probe('/web/__plugin/RadioMetaIntegratedDisplay.js'),
-                probe('/web/ConfigurationPage?name=RadioMetaIntegratedDisplay.js')
-            ]).then(function (results) {
-                return { legacy: results[0], embedded: results[1] };
             });
         }
 
@@ -2877,13 +2739,13 @@ define([], function () {
 
             runButton.disabled = true;
             runButton.innerHTML = '<span>Running diagnostics...</span>';
-            statusElement.textContent = 'Checking plugin, metadata, Emby sessions, and visible player elements...';
+            statusElement.textContent = 'Checking plugin, metadata, and Emby sessions...';
             if (resultsElement) resultsElement.style.display = 'none';
             diagnosticSetCopyButtonVisible(false);
 
             var checks = [];
             var startedAt = new Date();
-            var dashboardControllerInfo = window.__radioMetaDashboardControllerInfo_v1382;
+            var dashboardControllerInfo = window.__radioMetaDashboardControllerInfo_v1328;
             diagnosticAddCheck(checks,
                 dashboardControllerInfo && dashboardControllerInfo.initialized === true ? 'PASS' : 'WARN',
                 'Dashboard controller bundle',
@@ -2892,11 +2754,6 @@ define([], function () {
                         '; source mode=' + String(dashboardControllerInfo.sourceMode || 'unknown') +
                         '; sections=' + String((dashboardControllerInfo.sections || []).length) + '.'
                     : 'Dashboard controller build marker is unavailable. The browser may have an older cached controller or an incomplete dashboard resource.');
-            var helperKey = '__radioMetaIntegratedDisplay_v1323';
-            var loaderKey = '__radioMetaDisplayLoaderState_v1366';
-            var helperLoaded = window[helperKey] === true;
-            var loaderState = String(window[loaderKey] || 'not reported');
-            var loaderErrorPresent = !!window.__radioMetaDisplayLoaderError;
             var pagePath = String(window.location && window.location.pathname || '/');
             var userAgent = String(window.navigator && window.navigator.userAgent || 'unknown');
             var localDeviceId = '';
@@ -2930,11 +2787,6 @@ define([], function () {
                 }).catch(function (error) {
                     return { ok: false, error: error };
                 }),
-                diagnosticProbeDisplayResources(6000).then(function (value) {
-                    return { ok: true, value: value };
-                }).catch(function (error) {
-                    return { ok: false, error: error };
-                }),
                 diagnosticGetJson('RadioMeta/History', 9000).then(function (value) { return { ok: true, value: value }; }).catch(function (error) { return { ok: false, error: error }; }),
                 diagnosticGetJson('RadioMeta/TitleCleanup', 9000).then(function (value) { return { ok: true, value: value }; }).catch(function (error) { return { ok: false, error: error }; }),
                 diagnosticGetJson('RadioMeta/TitleCorrections', 9000).then(function (value) { return { ok: true, value: value }; }).catch(function (error) { return { ok: false, error: error }; }),
@@ -2946,14 +2798,12 @@ define([], function () {
                 var pathsResult = responses[2];
                 var sessionsResult = responses[3];
                 var serverInfoResult = responses[4];
-                var displayProbeResult = responses[5];
-                var displayProbe = displayProbeResult.ok ? displayProbeResult.value : null;
                 var separatedApiResults = [
-                    { label: 'History API', result: responses[6], field: 'Items' },
-                    { label: 'Title cleanup API', result: responses[7], field: 'Rules' },
-                    { label: 'Title corrections API', result: responses[8], field: 'Corrections' },
-                    { label: 'Station modes API', result: responses[9], field: 'Rules' },
-                    { label: 'Ignore phrases API', result: responses[10], field: 'Rules' }
+                    { label: 'History API', result: responses[5], field: 'Items' },
+                    { label: 'Title cleanup API', result: responses[6], field: 'Rules' },
+                    { label: 'Title corrections API', result: responses[7], field: 'Corrections' },
+                    { label: 'Station modes API', result: responses[8], field: 'Rules' },
+                    { label: 'Ignore phrases API', result: responses[9], field: 'Rules' }
                 ];
                 var serverInfo = serverInfoResult.ok ? (serverInfoResult.value || {}) : null;
                 var health = healthResult.ok ? (healthResult.value || {}) : null;
@@ -2986,15 +2836,51 @@ define([], function () {
                     }
                 });
 
-                var localSession = null;
+                // Emby can return more than one session row with the same browser DeviceId.
+                // Prefer the row that actually carries Radio Meta ProviderIds; selecting the
+                // first device match can otherwise report 'no Now Playing item' while a second
+                // row for the same browser is actively playing the station.
+                var localSessionCandidates = [];
+                var localRadioSessionCandidates = [];
                 if (localDeviceId) {
-                    localSession = sessions.find(function (session) {
+                    localSessionCandidates = sessions.filter(function (session) {
                         return String(diagnosticValue(session, 'DeviceId', 'deviceId') || '') === localDeviceId;
+                    });
+                    localRadioSessionCandidates = activeRadioSessions.filter(function (entry) {
+                        return String(diagnosticValue(entry.session, 'DeviceId', 'deviceId') || '') === localDeviceId;
+                    });
+                }
+
+                var localPlayerItemId = '';
+                try {
+                    var bridgeForSessionMatch = window.__radioMetaPlayerIntegration1328;
+                    var bridgePlayer = bridgeForSessionMatch && bridgeForSessionMatch.modules &&
+                        bridgeForSessionMatch.modules.currentPlayer && bridgeForSessionMatch.modules.currentPlayer.get();
+                    var bridgeItem = bridgePlayer && bridgeForSessionMatch.modules.playbackManager &&
+                        bridgeForSessionMatch.modules.playbackManager.currentItem(bridgePlayer);
+                    localPlayerItemId = String(diagnosticValue(bridgeItem, 'Id', 'id') || '');
+                } catch (_) {}
+
+                var localRadioSession = null;
+                if (localRadioSessionCandidates.length) {
+                    localRadioSession = localPlayerItemId
+                        ? (localRadioSessionCandidates.find(function (entry) {
+                            return String(diagnosticValue(entry.item, 'Id', 'id') || '') === localPlayerItemId;
+                        }) || localRadioSessionCandidates[0])
+                        : localRadioSessionCandidates[0];
+                }
+
+                var localSession = localRadioSession ? localRadioSession.session :
+                    (localSessionCandidates.find(function (session) {
+                        return !!diagnosticValue(session, 'NowPlayingItem', 'nowPlayingItem');
+                    }) || localSessionCandidates[0] || null);
+
+                if (!localRadioSession && localSession) {
+                    localRadioSession = activeRadioSessions.find(function (entry) {
+                        return entry.session === localSession;
                     }) || null;
                 }
-                var localRadioSession = localSession && activeRadioSessions.find(function (entry) {
-                    return entry.session === localSession;
-                });
+
                 var expectedTrack = localRadioSession ? {
                     song: localRadioSession.song,
                     artist: localRadioSession.artist,
@@ -3006,12 +2892,12 @@ define([], function () {
                         'The Radio Meta diagnostic endpoint did not respond. Build/install the current diagnostics update and restart Emby.');
                 } else {
                     var pluginVersion = String(diagnosticValue(health, 'PluginVersion', 'pluginVersion') || 'unknown');
-                    var expectedPluginVersionLine = /^1\.(?:3|7)\./.test(pluginVersion);
+                    var expectedPluginVersionLine = /^1\.3\./.test(pluginVersion);
                     diagnosticAddCheck(checks, expectedPluginVersionLine ? 'PASS' : 'WARN',
                         'Plugin version',
                         expectedPluginVersionLine
                             ? 'Server reports Radio Meta ' + pluginVersion + '.'
-                            : 'Server reports Radio Meta ' + pluginVersion + '; these diagnostics recognize the 1.3.x mainline and legacy 1.7.x development reports.');
+                            : 'Server reports Radio Meta ' + pluginVersion + '; this release expects the 1.3.x mainline version line.');
                     var dashboardReportedVersion = dashboardControllerInfo ? String(dashboardControllerInfo.version || 'unknown') : 'unknown';
                     // Assembly versions may include a fourth trailing zero, while the dashboard bundle
                     // intentionally reports the equivalent three-part release version.
@@ -3040,7 +2926,7 @@ define([], function () {
                             'Adaptive routing is disabled. Uncached lookups continue to run Shoutcast and direct ICY in parallel without learning a per-station preference.');
                     } else {
                         diagnosticAddCheck(checks, 'INFO', 'Adaptive metadata routing',
-                            'This plugin build does not report the adaptive-routing toggle; the setting is unavailable or this is the stable 1.3 line.');
+                            'This plugin build did not report the adaptive-routing toggle. The setting may be unavailable in this build or its response.');
                     }
 
                     var readerLimit = Number(diagnosticValue(health, 'DirectIcyMaxIntervals', 'directIcyMaxIntervals') || 0);
@@ -3155,73 +3041,37 @@ define([], function () {
                             ? 'Plugin configuration is available.'
                             : 'Configuration was not available to the loaded plugin.'
                     );
-                    diagnosticAddCheck(checks, 
-                        diagnosticValue(health, 'DisplayHelperResourceEmbedded', 'displayHelperResourceEmbedded') === true ? 'PASS' : 'FAIL',
-                        'Embedded display helper',
-                        diagnosticValue(health, 'DisplayHelperResourceEmbedded', 'displayHelperResourceEmbedded') === true
-                            ? 'The display JavaScript resource is present inside the plugin DLL.'
-                            : 'The expected embedded JavaScript resource is missing from the loaded DLL.'
-                    );
-                    diagnosticAddCheck(checks,
-                        diagnosticValue(health, 'DisplayLoaderResourceEmbedded', 'displayLoaderResourceEmbedded') === true ? 'PASS' : 'FAIL',
-                        'Embedded display loader',
-                        diagnosticValue(health, 'DisplayLoaderResourceEmbedded', 'displayLoaderResourceEmbedded') === true
-                            ? 'The DLL-hosted display loader resource is present.'
-                            : 'The DLL-hosted display loader resource is missing; verify the installed DLL and embedded resource declarations.');
-                    var displayRuntime = null;
-                    try {
-                        if (typeof window.__radioMetaDisplayDiagnostics_v1379 === 'function') displayRuntime = window.__radioMetaDisplayDiagnostics_v1379();
-                    } catch (_) {}
-                    if (!displayRuntime) {
-                        diagnosticAddCheck(checks, 'WARN', 'Display helper runtime diagnostics',
-                            'Runtime telemetry is unavailable. Confirm the embedded display helper is loaded and initialized.');
-                    } else {
-                        diagnosticAddCheck(checks, 'INFO', 'Display helper version',
-                            String(displayRuntime.displayHelperVersion || 'unknown'));
-                        var runtimeError = String(displayRuntime.lastPollError || '').trim();
-                        diagnosticAddCheck(checks, runtimeError ? 'WARN' : 'PASS', 'Display helper polling',
-                            'Last poll=' + String(displayRuntime.lastPollStatus || 'unknown') +
-                            '; duration=' + Number(displayRuntime.lastPollDurationMs || 0) + ' ms; sessions=' + Number(displayRuntime.lastSessionCount || 0) +
-                            '; selected session=' + (displayRuntime.lastHasPlaybackSession ? 'yes' : 'no') +
-                            '; item=' + (displayRuntime.lastHasNowPlayingItem ? 'yes' : 'no') +
-                            '; valid song/artist=' + (displayRuntime.lastTrackMetadataValid ? 'yes' : 'no') +
-                            (runtimeError ? '; last error=' + runtimeError : '.'));
-                        diagnosticAddCheck(checks,
-                            displayRuntime.radioPlaybackPending ? (displayRuntime.pendingExpired ? 'WARN' : 'INFO') : 'INFO',
-                            'Pending radio metadata',
-                            'Pending=' + (displayRuntime.radioPlaybackPending ? 'yes' : 'no') +
-                            '; elapsed=' + Math.round(Number(displayRuntime.radioPlaybackPendingElapsedMs || 0) / 1000) + ' s; timeout expired=' +
-                            (displayRuntime.pendingExpired ? 'yes' : 'no') + '; cached track=' + (displayRuntime.currentTrackCached ? 'yes' : 'no') + '.');
-                        diagnosticAddCheck(checks, 'INFO', 'Station-switch media-session reinforcement',
-                            'CurrentTracks fallback result=' + String(displayRuntime.lastCurrentTracksFallbackResult || 'never') +
-                            '; accepted fallbacks=' + Number(displayRuntime.currentTracksFallbackSuccessCount || 0) +
-                            '; consecutive fallback misses=' + Number(displayRuntime.currentTracksFallbackMisses || 0) +
-                            '; last fallback station=' + String(displayRuntime.lastCurrentTracksFallbackStation || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 80) +
-                            '; Media Session republish attempts succeeded=' + Number(displayRuntime.stationTransitionRepublishCount || 0) +
-                            '; last republish reason=' + String(displayRuntime.lastStationTransitionRepublishReason || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 60) + '.');
-                        diagnosticAddCheck(checks, 'INFO', 'Station-transition telemetry',
-                            'Station-cache entries=' + Number(displayRuntime.stationCacheEntryCount || 0) +
-                            '; station transition pending=' + (displayRuntime.stationTransitionPending ? 'yes' : 'no') +
-                            '; active track from recent cache=' + (displayRuntime.activeTrackFromRecentStationCache ? 'yes' : 'no') +
-                            '; stale tracks rejected=' + Number(displayRuntime.staleTransitionTrackRejections || 0) +
-                            '; .strm fallbacks shown=' + Number(displayRuntime.stationTransitionFallbackCount || 0) +
-                            '; last fallback station=' + String(displayRuntime.lastStationTransitionFallbackStation || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 80) +
-                            '; fallback source=' + String(displayRuntime.lastStationTransitionFallbackSource || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 40) +
-                            '; poll status=' + String(displayRuntime.lastPollStatus || 'unknown').replace(/[\r\n]/g, ' ').slice(0, 60) +
-                            '; immediate refreshes=' + Number(displayRuntime.immediateRefreshCount || 0) +
-                            '; queued=' + (displayRuntime.immediateRefreshQueued ? 'yes' : 'no') +
-                            '; last reason=' + String(displayRuntime.lastImmediateRefreshReason || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 100) + '.');
-                        var outputAdapterStatus = displayRuntime.outputAdapterStatus || {};
-                        var outputAdapterErrors = displayRuntime.outputAdapterErrors || {};
-                        Object.keys(outputAdapterStatus).forEach(function (adapterName) {
-                            var adapterState = String(outputAdapterStatus[adapterName] || 'unknown');
-                            var adapterError = String(outputAdapterErrors[adapterName] || '').trim();
-                            diagnosticAddCheck(checks,
-                                adapterState === 'ready' ? 'PASS' : 'WARN',
-                                'Display adapter: ' + adapterName,
-                                'State=' + adapterState + (adapterError ? '; last error=' + adapterError.slice(0, 200) : '.'));
-                        });
+                    var playerBootstrapInstalled = diagnosticValue(health, 'PlayerIntegrationBootstrapInstalled', 'playerIntegrationBootstrapInstalled') === true;
+                    var playerResourceEmbedded = diagnosticValue(health, 'PlayerIntegrationResourceEmbedded', 'playerIntegrationResourceEmbedded') === true;
+                    var playerInstallStatus = String(diagnosticValue(health, 'PlayerIntegrationInstallStatus', 'playerIntegrationInstallStatus') || 'unknown');
+                    var playerDeploymentReady = playerBootstrapInstalled && playerResourceEmbedded;
+                    diagnosticAddCheck(checks, playerDeploymentReady ? 'PASS' : 'WARN', 'Native player integration deployment',
+                        playerDeploymentReady
+                            ? 'The DLL startup reference is installed and the player integration resource is embedded in RadioMeta.dll. The integration updates Emby native mini-player, full-player, and Dashboard display slots. It does not modify nowplayingbar.js or other Emby player modules.'
+                            : 'The native player integration is not fully deployed. Bootstrap installed=' + playerBootstrapInstalled + '; embedded resource=' + playerResourceEmbedded + '; install status=' + playerInstallStatus + '. Check plugin startup logs and the Emby dashboard-ui folder.');
+
+                    var browserPlayerBridge = null;
+                    var bridgeLookupWindow = window;
+                    for (var bridgeLookupDepth = 0; bridgeLookupDepth < 5; bridgeLookupDepth++) {
+                        try {
+                            browserPlayerBridge = bridgeLookupWindow.__radioMetaPlayerIntegration1328 || null;
+                            if (browserPlayerBridge || !bridgeLookupWindow.parent || bridgeLookupWindow.parent === bridgeLookupWindow) break;
+                            bridgeLookupWindow = bridgeLookupWindow.parent;
+                        } catch (_) {
+                            break;
+                        }
                     }
+                    var browserBridgeStarted = !!(browserPlayerBridge && browserPlayerBridge.started === true);
+                    var browserModulesConnected = !!(browserPlayerBridge && browserPlayerBridge.modules &&
+                        browserPlayerBridge.modules.currentPlayer && browserPlayerBridge.modules.playbackManager && browserPlayerBridge.modules.events);
+                    var browserBridgeStatus = browserBridgeStarted && browserModulesConnected ? 'PASS' :
+                        (localRadioSession ? 'WARN' : 'INFO');
+                    diagnosticAddCheck(checks, browserBridgeStatus, 'Native player browser bridge',
+                        browserBridgeStarted && browserModulesConnected
+                            ? 'The DLL-embedded browser bridge is running and connected to Emby current-player, PlaybackManager, and event modules.'
+                            : localRadioSession
+                                ? 'This browser has an active Radio Meta session, but its embedded player bridge is not confirmed as running and connected. Restart the web app and rerun diagnostics.'
+                                : 'The bridge is not visible in this page context. This is informational when diagnostics are viewed from another device or browser context.');
                     diagnosticAddCheck(checks, 
                         diagnosticValue(health, 'HistoryStoreInitialized', 'historyStoreInitialized') === true ? 'PASS' : 'WARN',
                         'History service',
@@ -3276,28 +3126,6 @@ define([], function () {
                     diagnosticAddCheck(checks, 'PASS', 'Emby server version', 'Emby reports version ' + embyVersion + '.');
                 } else {
                     diagnosticAddCheck(checks, 'WARN', 'Emby server version', 'Could not read System/Info/Public; other checks may still be valid.');
-                }
-
-                if (displayProbe) {
-                    var embeddedProbe = displayProbe.embedded || {};
-                    var legacyProbe = displayProbe.legacy || {};
-                    var embeddedOk = embeddedProbe.status === 200 && embeddedProbe.looksLikeModule;
-                    diagnosticAddCheck(checks, embeddedOk ? 'PASS' : 'FAIL', 'Embedded display resource URL',
-                        embeddedOk
-                            ? 'ConfigurationPage resource returned HTTP 200 with JavaScript module content (' + embeddedProbe.bytes + ' characters).'
-                            : 'ConfigurationPage resource did not return a recognizable JavaScript module. HTTP ' +
-                                (embeddedProbe.status || 'request error') + ', content type=' + (embeddedProbe.contentType || '(none)') +
-                                (embeddedProbe.error ? ', error=' + embeddedProbe.error : '') + '. Verify the DLL resource and Emby web route.');
-                    diagnosticAddCheck(checks, legacyProbe.status === 404 ? 'INFO' : (legacyProbe.status === 200 ? 'INFO' : 'WARN'),
-                        'Legacy display resource URL',
-                        legacyProbe.status === 404
-                            ? 'The old /web/__plugin/ URL returns 404; this is expected for the current embedded-resource loader and is not the URL the helper should use.'
-                            : 'Legacy URL HTTP ' + (legacyProbe.status || 'request error') +
-                                (legacyProbe.contentType ? ', content type=' + legacyProbe.contentType : '') +
-                                (legacyProbe.error ? ', error=' + legacyProbe.error : '') + '.');
-                } else {
-                    diagnosticAddCheck(checks, 'WARN', 'Display resource URL probe',
-                        'Automatic fetch checks could not complete. Inspect browser network errors and verify the Emby web resource route.');
                 }
 
                 if (tracksResult.ok && currentTrackData && !diagnosticValue(currentTrackData, 'Error', 'error')) {
@@ -3388,79 +3216,8 @@ define([], function () {
                         'A session could not be matched to an accepted cache entry for a direct comparison.');
                 }
 
-                diagnosticAddCheck(checks, 
-                    helperLoaded ? 'PASS' : (loaderState === 'failed' || loaderErrorPresent ? 'FAIL' : 'WARN'),
-                    'Display helper loaded',
-                    helperLoaded
-                        ? 'The embedded display helper registered in this browser.'
-                        : 'Helper flag is absent; loader state=' + loaderState +
-                            (loaderErrorPresent ? '; a loader error was recorded.' : '') +
-                            '. Hard-refresh Emby Web; if it persists, verify the Web loader and embedded resource.'
-                );
-                diagnosticAddCheck(checks, 
-                    loaderState === 'loaded' ? 'PASS' : (loaderState === 'failed' ? 'FAIL' : 'WARN'),
-                    'Web loader',
-                    loaderState === 'loaded'
-                        ? 'The nowplayingbar.js loader reports that its module import completed.'
-                        : 'Loader state is "' + loaderState + '". Verify the loader installation and browser console.'
-                );
-
-                var miniTargets = Array.prototype.slice.call(document.querySelectorAll('.nowPlayingBarText, .nowplayingbar-textitems'))
-                    .filter(diagnosticVisible);
-                var miniTarget = miniTargets.length ? miniTargets[0] : null;
-                var miniText = miniTarget ? diagnosticText(miniTarget.innerText || miniTarget.textContent || '') : '';
-                if (!miniTarget) {
-                    diagnosticAddCheck(checks, localRadioSession ? 'WARN' : 'INFO', 'Mini-player display',
-                        localRadioSession
-                            ? 'This browser session is playing Radio Meta, but no visible mini-player text element exists. Open or reveal the mini-player and rerun.'
-                            : 'No visible mini-player text element exists in this page. This is normal on a settings page or when playback is happening in another browser/device.');
-                } else if (expectedTrack && expectedTrack.song && expectedTrack.artist) {
-                    var miniOk = diagnosticContainsTrack(miniText, expectedTrack, false);
-                    diagnosticAddCheck(checks, miniOk ? 'PASS' : 'FAIL', 'Mini-player display',
-                        miniOk
-                            ? 'Visible mini-player text contains the current song and artist.'
-                            : 'Visible mini-player text does not match this browser session. Expected song="' +
-                                expectedTrack.song + '", artist="' + expectedTrack.artist + '"; observed text="' +
-                                miniText.slice(0, 180) + '". Hard-refresh first; if this persists, report the mismatch.');
-                } else {
-                    diagnosticAddCheck(checks, 'INFO', 'Mini-player display',
-                        'Visible mini-player text="' + miniText.slice(0, 180) +
-                            '". A matching local Radio Meta playback session was not identified, so this page cannot be used to judge whether that text is correct.');
-                }
-
-                var largeTargets = Array.prototype.slice.call(document.querySelectorAll(
-                    'h3.videoOsdParentTitle.videoOsdParentTitle-small, h3.videoOsdParentTitle, h1.videoOsdParentTitleLarge, h1.videoOsdParentTitle, #videoOsdParentTitleLarge'
-                )).filter(diagnosticVisible);
-                if (!largeTargets.length) {
-                    diagnosticAddCheck(checks, 'INFO', 'Big-player display',
-                        'Big-player title is not visible in this page. Open the big player and rerun diagnostics to verify its rendered text.');
-                } else if (expectedTrack && expectedTrack.song && expectedTrack.artist) {
-                    var largeText = diagnosticText(largeTargets[0].innerText || largeTargets[0].textContent || '');
-                    var largeOk = diagnosticContainsTrack(largeText, expectedTrack, !!expectedTrack.station);
-                    diagnosticAddCheck(checks, largeOk ? 'PASS' : 'FAIL', 'Big-player display',
-                        largeOk ? 'Visible big-player title contains the song, artist, and station.'
-                            : 'Big-player title does not contain all expected metadata. Observed text="' + largeText.slice(0, 180) + '".');
-                } else {
-                    diagnosticAddCheck(checks, 'INFO', 'Big-player display',
-                        'A big-player title is visible, but a matching local Radio Meta session was not identified.');
-                }
-
-                var dashboardTargets = Array.prototype.slice.call(document.querySelectorAll(
-                    '.cardText.cardText-first[data-rnp-dashboard-title="song-artist-station"]'
-                )).filter(diagnosticVisible);
-                if (!dashboardTargets.length) {
-                    diagnosticAddCheck(checks, 'INFO', 'Dashboard Now Playing display',
-                        'No visible Radio Meta dashboard card is present in this plugin settings view. This visual check is available only when the relevant Dashboard Now Playing card is rendered in this page.');
-                } else if (expectedTrack && expectedTrack.song && expectedTrack.artist) {
-                    var cardText = diagnosticText(dashboardTargets[0].innerText || dashboardTargets[0].textContent || '');
-                    var cardOk = diagnosticContainsTrack(cardText, expectedTrack, !!expectedTrack.station);
-                    diagnosticAddCheck(checks, cardOk ? 'PASS' : 'FAIL', 'Dashboard Now Playing display',
-                        cardOk ? 'Visible dashboard card contains the song, artist, and station.'
-                            : 'Dashboard card does not contain all expected metadata. Observed text="' + cardText.slice(0, 180) + '".');
-                } else {
-                    diagnosticAddCheck(checks, 'INFO', 'Dashboard Now Playing display',
-                        'A marked dashboard card is visible, but it cannot be compared without a matching local Radio Meta session.');
-                }
+                diagnosticAddCheck(checks, 'INFO', 'Native player visual verification',
+                    'The diagnostic confirms DLL deployment and browser bridge connectivity, but does not measure final rendered pixels. Visual styling and station artwork should be checked directly in the mini-player, full player, and Dashboard after client or Emby updates.');
 
                 if (!window.navigator || !('mediaSession' in window.navigator) || !window.navigator.mediaSession) {
                     diagnosticAddCheck(checks, localRadioSession ? 'WARN' : 'INFO', 'Browser Media Session',
@@ -3694,9 +3451,6 @@ define([], function () {
                     'Plugin version (reported): ' + (health ? String(diagnosticValue(health, 'PluginVersion', 'pluginVersion') || 'unknown') : 'health endpoint unavailable'),
                     'Page path: ' + pagePath,
                     'Browser: ' + userAgent,
-                    'Loader state: ' + loaderState,
-                    'Loader error recorded: ' + (loaderErrorPresent ? diagnosticSanitizeError(window.__radioMetaDisplayLoaderError || 'yes') : 'no'),
-                    'Display helper global present: ' + (helperLoaded ? 'yes' : 'no'),
                     'Local Emby session matched: ' + (localSession ? 'yes' : 'no'),
                     'Local session has Now Playing item: ' + (localSession && diagnosticValue(localSession, 'NowPlayingItem', 'nowPlayingItem') ? 'yes' : 'no'),
                     'Local session has Radio Meta metadata: ' + (localRadioSession ? 'yes' : 'no'),
@@ -3704,22 +3458,9 @@ define([], function () {
                     'Radio Meta-bearing Emby sessions: ' + activeRadioSessions.length
                 ];
 
-                if (displayProbe) {
-                    var legacyReportProbe = displayProbe.legacy || {};
-                    var embeddedReportProbe = displayProbe.embedded || {};
-                    headerLines.push('Legacy display URL probe: HTTP ' + (legacyReportProbe.status || 'request error') +
-                        '; content type=' + (legacyReportProbe.contentType || '(none)') + '; bytes=' + (legacyReportProbe.bytes || 0));
-                    headerLines.push('Embedded display URL probe: HTTP ' + (embeddedReportProbe.status || 'request error') +
-                        '; content type=' + (embeddedReportProbe.contentType || '(none)') + '; bytes=' + (embeddedReportProbe.bytes || 0) +
-                        '; AMD module=' + (embeddedReportProbe.looksLikeModule ? 'yes' : 'no'));
-                }
                 if (health) {
                     headerLines.push('Plugin configuration available: ' +
                         (diagnosticValue(health, 'ConfigurationAvailable', 'configurationAvailable') === true ? 'yes' : 'no'));
-                    headerLines.push('Embedded display resource present in DLL: ' +
-                        (diagnosticValue(health, 'DisplayHelperResourceEmbedded', 'displayHelperResourceEmbedded') === true ? 'yes' : 'no'));
-                    headerLines.push('Embedded display loader resource present in DLL: ' +
-                        (diagnosticValue(health, 'DisplayLoaderResourceEmbedded', 'displayLoaderResourceEmbedded') === true ? 'yes' : 'no'));
                     var healthTracks = diagnosticValue(health, 'CurrentTracks', 'currentTracks') || [];
                     if (healthTracks.length) {
                         headerLines.push('Recent accepted metadata (up to 10):');
@@ -3865,50 +3606,6 @@ define([], function () {
                     });
                 }
 
-                try {
-                    var reportRuntime = typeof window.__radioMetaDisplayDiagnostics_v1379 === 'function' ? window.__radioMetaDisplayDiagnostics_v1379() : null;
-                    if (reportRuntime) {
-                        headerLines.push('Display helper version: ' + String(reportRuntime.displayHelperVersion || 'unknown'));
-                        headerLines.push('Display helper polling: status=' + String(reportRuntime.lastPollStatus || 'unknown') +
-                            '; count=' + Number(reportRuntime.pollCount || 0) + '; last duration=' + Number(reportRuntime.lastPollDurationMs || 0) + ' ms' +
-                            '; session count=' + Number(reportRuntime.lastSessionCount || 0));
-                        headerLines.push('Display helper cache: present=' + (reportRuntime.currentTrackCached ? 'yes' : 'no') +
-                            '; age=' + (reportRuntime.currentTrackCacheAgeMs == null ? 'n/a' : Math.round(reportRuntime.currentTrackCacheAgeMs) + ' ms'));
-                        headerLines.push('Station cache: entries=' + Number(reportRuntime.stationCacheEntryCount || 0) +
-                            '; active key present=' + (reportRuntime.activeStationCacheKeyPresent ? 'yes' : 'no') +
-                            '; active track reused from recent station cache=' + (reportRuntime.activeTrackFromRecentStationCache ? 'yes' : 'no') +
-                            '; most recent reuse=' + (reportRuntime.lastStationCacheReuse ? 'yes' : 'no'));
-                        headerLines.push('Station-switch reinforcement: CurrentTracks result=' + String(reportRuntime.lastCurrentTracksFallbackResult || 'never') +
-                            '; successful server fallbacks=' + Number(reportRuntime.currentTracksFallbackSuccessCount || 0) +
-                            '; consecutive misses=' + Number(reportRuntime.currentTracksFallbackMisses || 0) +
-                            '; latest fallback station=' + String(reportRuntime.lastCurrentTracksFallbackStation || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 80) +
-                            '; successful Media Session republishes=' + Number(reportRuntime.stationTransitionRepublishCount || 0) +
-                            '; last republish=' + String(reportRuntime.lastStationTransitionRepublishReason || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 60));
-                        headerLines.push('Station transition: pending=' + (reportRuntime.stationTransitionPending ? 'yes' : 'no') +
-                            '; stale transition tracks rejected=' + Number(reportRuntime.staleTransitionTrackRejections || 0) +
-                            '; immediate refresh count=' + Number(reportRuntime.immediateRefreshCount || 0) +
-                            '; .strm fallback count=' + Number(reportRuntime.stationTransitionFallbackCount || 0) +
-                            '; last fallback station=' + String(reportRuntime.lastStationTransitionFallbackStation || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 80) +
-                            '; fallback source=' + String(reportRuntime.lastStationTransitionFallbackSource || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 40) +
-                            '; last poll status=' + String(reportRuntime.lastPollStatus || 'unknown').replace(/[\r\n]/g, ' ').slice(0, 60) +
-                            '; last fallback at UTC=' + String(reportRuntime.lastStationTransitionFallbackAtUtc || 'not recorded') +
-                            '; queued=' + (reportRuntime.immediateRefreshQueued ? 'yes' : 'no') +
-                            '; last reason=' + String(reportRuntime.lastImmediateRefreshReason || 'not recorded').replace(/[\r\n]/g, ' ').slice(0, 100) +
-                            '; last at UTC=' + String(reportRuntime.lastImmediateRefreshAtUtc || 'not recorded'));
-                        headerLines.push('Pending radio metadata: active=' + (reportRuntime.radioPlaybackPending ? 'yes' : 'no') +
-                            '; elapsed=' + Math.round(Number(reportRuntime.radioPlaybackPendingElapsedMs || 0) / 1000) + ' s' +
-                            '; timeout expired=' + (reportRuntime.pendingExpired ? 'yes' : 'no'));
-                        var reportAdapterStatus = reportRuntime.outputAdapterStatus || {};
-                        var reportAdapterErrors = reportRuntime.outputAdapterErrors || {};
-                        Object.keys(reportAdapterStatus).forEach(function (adapterName) {
-                            headerLines.push('Display adapter ' + adapterName + ': ' + String(reportAdapterStatus[adapterName] || 'unknown') +
-                                (reportAdapterErrors[adapterName] ? ' | ' + diagnosticSanitizeError(reportAdapterErrors[adapterName]) : ''));
-                        });
-                        if (reportRuntime.lastPollError) headerLines.push('Display helper last poll error: ' + String(reportRuntime.lastPollError).slice(0, 240));
-                    } else {
-                        headerLines.push('Display helper runtime telemetry: unavailable (older helper or initialization failure).');
-                    }
-                } catch (_) {}
                 diagnosticRender(checks, headerLines, health ? (diagnosticValue(health, 'RecentEvents', 'recentEvents') || []) : [], health ? diagnosticValue(health, 'Performance', 'performance') : null);
             }).catch(function (error) {
                 diagnosticAddCheck(checks, 'FAIL', 'Diagnostic runner',

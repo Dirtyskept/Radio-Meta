@@ -344,18 +344,9 @@ public sealed class RadioMetaPlugin :
             },
             new PluginPageInfo
             {
-                // Embedded AMD loader module. The WebLoader contains only a small
-                // bootstrap pointer; retry and import logic remains in this DLL resource.
-                Name = "RadioMetaDisplayLoader.js",
+                Name = "RadioMetaPlayerIntegration.js",
                 EmbeddedResourcePath =
-                    "RadioMeta.WebUI.RadioMetaDisplayLoader.js"
-            },
-            new PluginPageInfo
-            {
-                // Embedded AMD module containing the integrated display helper.
-                Name = "RadioMetaIntegratedDisplay.js",
-                EmbeddedResourcePath =
-                    "RadioMeta.WebUI.RadioMetaIntegratedDisplay.js"
+                    "RadioMeta.WebUI.RadioMetaPlayerIntegration.js"
             }
         };
     }
@@ -370,7 +361,9 @@ public sealed class RadioMetaEntryPoint : IServerEntryPoint
     private readonly ILogger _logger;
     private readonly RadioMetaPlugin? _plugin;
     private readonly ISessionManager _sessionManager;
+    private readonly IApplicationPaths _applicationPaths;
 
+    private RadioMetaPlayerIntegration? _playerIntegration;
     private RadioMetaSessionTitleInjector? _titleInjector;
     private RadioCurrentlyPlayingStationCapture? _currentlyPlayingStationCapture;
     private RadioMetaProxyService? _proxyService;
@@ -385,6 +378,7 @@ public sealed class RadioMetaEntryPoint : IServerEntryPoint
             .FirstOrDefault();
 
         _sessionManager = applicationHost.Resolve<ISessionManager>();
+        _applicationPaths = applicationHost.Resolve<IApplicationPaths>();
     }
 
     public void Run()
@@ -397,6 +391,21 @@ public sealed class RadioMetaEntryPoint : IServerEntryPoint
         }
 
         _plugin.MemoryDiagnostics.Start();
+
+        // The DLL owns the complete player integration. It embeds the script,
+        // serves it through the plugin resource route, and adds one reversible
+        // reference to dashboard-ui/index.html. No Emby player module is patched.
+        try
+        {
+            _playerIntegration = new RadioMetaPlayerIntegration(_applicationPaths, _logger);
+            _playerIntegration.Install();
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(
+                "Radio Meta 1.3.128 player integration startup failed ({0}).",
+                ex.GetType().Name);
+        }
 
         var configuredFolder = _plugin.GetConfiguredStationFolder();
         var folder = _plugin.GetStationFolder();
@@ -502,6 +511,8 @@ public sealed class RadioMetaEntryPoint : IServerEntryPoint
 
     public void Dispose()
     {
+        _playerIntegration?.Dispose();
+        _playerIntegration = null;
         if (_plugin is not null) _plugin.MemoryDiagnostics.Stop();
         _currentlyPlayingStationCapture?.Dispose();
         _currentlyPlayingStationCapture = null;

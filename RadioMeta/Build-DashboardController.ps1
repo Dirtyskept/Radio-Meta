@@ -6,7 +6,7 @@ $sectionRoot = Join-Path $webUiRoot 'DashboardSections'
 $outputPath = Join-Path $webUiRoot 'RadioMetaDashboard.js'
 
 $sectionFiles = @(
-    '00-Amd-Shell-And-Helper-Bootstrap.js.part',
+    '00-Amd-Shell.js.part',
     '01-Controller-Entry-And-Common-Helpers.js.part',
     '02-Station-Folder-Panel.js.part',
     '03-Play-History-Panel.js.part',
@@ -43,7 +43,7 @@ $content = $content -replace "`r`n", "`n"
 $content = $content -replace "`r", "`n"
 
 foreach ($required in @(
-    "__radioMetaDashboardControllerInfo_v1382",
+    "__radioMetaDashboardControllerInfo_v1328",
     "function scanStationFolder(completionNote, stationOperationData)",
     "function runRadioMetaDiagnostics()",
     "function addCurrentlyPlayingStationToForm()",

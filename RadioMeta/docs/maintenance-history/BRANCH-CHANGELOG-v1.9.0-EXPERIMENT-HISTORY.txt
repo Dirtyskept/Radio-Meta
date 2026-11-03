@@ -1,0 +1,238 @@
+RADIO META 1.9.0 — EXPERIMENT BASELINE
+=====================================
+
+- Created as a separate experimental line from Radio Meta v1.3.126.
+- Preserves the existing metadata/backend services, station management, history,
+  proxy, adaptive routing, configuration identity, and diagnostic functionality.
+- Advances the project version to 1.9.0; assembly name remains RadioMeta.
+- Removes the old WebLoader installer/restore package and the old player-display
+  loader/helper resources from the 1.9 project.
+- Keeps the Radio Meta settings Dashboard as an embedded Emby plugin page.
+- Adds a first experimental DLL-owned player integration path. The DLL embeds
+  RadioMetaPlayerIntegration.js, registers it as a plugin resource, and inserts
+  one reversible script reference into dashboard-ui/index.html while the plugin
+  is active. The DLL removes only its marked reference when its entry point is
+  disposed. No external script file is installed.
+- The embedded client bridge imports Emby's existing current-player,
+  PlaybackManager, and event-bus modules. It updates the current local Audio
+  item's in-memory display metadata, raises Emby's native statechange event,
+  and intercepts only the matching radio item's `displayitemupdated` event so
+  the mini-player and full-player OSD renderers receive the song/artist values
+  even when Emby reuses a cached display item for the same .strm ID.
+- Dashboard Now Playing cards are updated from the existing session ProviderIds
+  (with the Radio Meta CurrentTracks API as a session-ID fallback).
+- The first target is song title + artist in the mini-player, full player, and
+  Dashboard Now Playing, with station title and .strm artwork excluded.
+- This is an experimental client bridge initiated and served by the DLL. It is
+  not a purely server-side solution: the DLL adds a marked startup reference to
+  Emby's dashboard-ui/index.html so the browser executes the embedded resource.
+  It does not modify nowplayingbar.js or any other Emby player source module.
+
+VALIDATION STATUS
+-----------------
+- Source extraction and structural edits performed.
+- RadioMetaPlayerIntegration.js passes Node.js syntax validation and the AMD
+  module factory executes in the simulated Emby loader test.
+- The Node.js simulated event-path smoke test passed: the fake local player and
+  native display-item event received the expected song title and artist.
+- The project XML parses, all embedded resources exist, and the generated
+  Dashboard bundle matches its 15 source sections exactly.
+- SUPERSEDED: the initial bootstrap incorrectly referenced a Dashboard global
+  helper that is not present in the supplied Emby web client. Bootstrap revision
+  2 below uses the actual PluginManager module export and AMD require([...]) path.
+- C# compilation has not been run in this workspace because the .NET SDK and
+  Windows PowerShell are not installed here. Build and runtime validation remain
+  necessary on the Windows test host with the matching Emby assemblies.
+- The generated bootstrap, plugin-resource URL resolution, and AMD module
+  initialization still require validation in the user's Emby browser.
+- No successful player-display result is claimed yet. The native event path,
+  display-item interception, Dashboard card rendering, and automatic index
+  reference lifecycle must be verified in the user's Emby 4.10.2.0 test server.
+
+
+BOOTSTRAP REVISION 2 — RESOURCE LOADER FIX
+------------------------------------------
+- Corrected resource discovery: the actual Emby 4.10.2.0 client exposes
+  getConfigurationResourceUrl() on the default export of
+  ./modules/common/pluginmanager.js, not on window.Dashboard.
+- The DLL bootstrap now imports Emby's PluginManager module, resolves the
+  embedded RadioMetaPlayerIntegration.js URL with getConfigurationResourceUrl(),
+  and loads it using Emby's AMD require([...]) pattern used by its own settings
+  pages.
+- The DLL installer now upgrades an existing marked bootstrap in
+  dashboard-ui/index.html. This is required because the initial implementation
+  otherwise left its obsolete loader check in place after a DLL update.
+- The previous 'loader did not become available' message is explained by the
+  incorrect window.Dashboard assumption. The earlier integration-started /
+  connected / sent messages should not be treated as proof of this DLL resource
+  loading path until the corrected bootstrap emits its new 'resource loaded'
+  message after a clean browser refresh.
+- Node.js syntax and simulated PluginManager-to-AMD-resource loading tests pass.
+- The bootstrap also recognizes and replaces the prior boolean global guard used
+  by the first revision, preventing an old page-state flag from blocking startup.
+- No live Emby verification or successful player-display result is claimed.
+
+
+DASHBOARD NOW PLAYING TARGET FIX — REVISION 3
+-------------------------------------------
+- User diagnostic confirmed that Emby's local PlaybackManager state now contains
+  the ICY song title and artist, while the server SessionInfo.NowPlayingItem.Name
+  remains the station .strm title. The corresponding RadioMeta ProviderIds are
+  present in the session DTO.
+- Inspection of the supplied Emby 4.10.2.0 dashboard/dashboard.html confirmed
+  that the Active Sessions / Now Playing card list is the .nowPlayingSessions
+  element. That template does not contain an element with id dashboardPage.
+- The earlier Dashboard updater queried #dashboardPage and therefore returned
+  before it could find or update any Now Playing card.
+- The updater now targets .nowPlayingSessions directly, uses the actual container
+  as its route-presence signal, and exposes dashboardContainerFound and
+  dashboardMatchedCards in its diagnostic state.
+- This change affects only the DLL-embedded Dashboard display integration; no
+  Emby client files, nowplayingbar.js, WebLoader, or userscripts are added.
+- Node syntax/smoke tests and live browser verification remain separate checks.
+
+
+DISPLAY PRESENTATION POLISH — REVISION 4
+----------------------------------------
+- Following the user's live confirmation that the Emby mini-player, full player,
+  and Dashboard Now Playing all update correctly, this revision changes only
+  the presentation of the existing song/artist lines. Metadata acquisition,
+  session matching, native statechange publishing, and Dashboard track matching
+  are not changed.
+- Artist text now uses Emby's existing `secondaryText` theme class, so it follows
+  the same muted grey/secondary color as other native Emby metadata. This is
+  applied to the mini-player, full-player OSD line, and Dashboard card artist.
+- The mini-player text rows now use the previous Radio Meta display's block-row
+  layout, width/overflow handling, and text-area sizing. The full-player title
+  uses the previous two-span song/artist structure with the artist on a
+  `secondaryText` line and the original auto-height/overflow treatment. The
+  intention is to bring the title stack back toward the prior vertical alignment
+  without hard-coded screen coordinates or changes to player geometry.
+- The native display elements are restored to their captured original markup
+  when Radio Meta metadata stops applying or the active station item changes.
+- No Emby source files are patched. All changes are in the DLL-embedded
+  RadioMetaPlayerIntegration.js resource. There is no WebLoader, userscript,
+  browser extension, or separate client-side file.
+- Node.js syntax and the existing native player / Dashboard / bootstrap smoke
+  tests pass. Live visual confirmation of the adjusted spacing and color is
+  still required on the user's Emby browser.
+
+
+STATION ARTWORK RESTORATION — REVISION 5
+---------------------------------------
+- User confirmed that the station logo remains visible on the server-side
+  Dashboard Now Playing card but flashes briefly and then disappears from the
+  mini-player/full-player in some browser clients, including Safari and remote
+  Firefox.
+- Source inspection identified the direct cause: the initial text-only test
+  deliberately cleared PrimaryImageTag, PrimaryImageItemId, ImageTags,
+  PrimaryImageAspectRatio, ImageBlurHashes, and AlbumPrimaryImageTag from the
+  browser's local display item. Emby's native now-playing bar reads
+  PrimaryImageTag or ImageTags.Primary and uses PrimaryImageItemId/Id for its
+  image URL; if those fields are cleared during the Radio Meta state update,
+  the image can appear on initial render and then be cleared on the next native
+  display-item refresh. The Dashboard continues to show the logo because the
+  server-side session DTO is not modified by this local player integration.
+- Revision 5 no longer alters any original station image fields or album-art
+  fallback fields while applying ICY song/artist text. It preserves the
+  original .strm image identity, tag, aspect ratio, blur hash, and image source
+  IDs for Emby's own native image resolver. The playback item ID and stream URL
+  remain unchanged.
+- Added a regression fixture proving that PrimaryImageTag, ImageTags.Primary,
+  PrimaryImageItemId, PrimaryImageAspectRatio, ImageBlurHashes.Primary, and
+  AlbumPrimaryImageTag survive both the local item update and emitted
+  display-item copy.
+- Node syntax and simulated player-event/artwork-preservation tests pass.
+  Actual logo stability still requires confirmation in the user's browser and
+  Safari phone client.
+
+
+NATIVE DISPLAY FIDELITY — REVISION 6
+----------------------------------
+- User confirmation: the station logo now remains visible in remote Firefox.
+  This revision preserves the current artwork behavior and does not alter any
+  original .strm image tags, image IDs, aspect ratio, blur hashes, or album-art
+  fallback values.
+- Mini-player: removed the earlier custom secondaryText artist styling and left
+  the whole now-playing text area to Emby's native nowplayingbar renderer. Its
+  song and artist are two equal-style native text rows; Radio Meta no longer
+  changes their DOM classes, color, spacing, or vertical position.
+- Full player: left Emby's native song-title and artist/subtitle slots untouched.
+  The station name is placed only in `.videoOsdThirdTitle`, which is Emby's
+  native third/album row. A scoped MutationObserver keeps the station text in
+  that slot if the OSD rerenders or restores Album text after a player update.
+  The observer does not change the native title or artist row.
+- Dashboard Now Playing: song replaces only `.cardText-first`; artist is placed
+  in the existing sibling `.cardText-secondary` row. Existing title/artist row
+  classes and inline styles are retained. The unused blank runtime row is
+  collapsed to prevent it from adding a third line of card height. No nested
+  text block, custom font, margin, padding, or vertical offset is introduced.
+- This addresses the three surface-specific requirements independently:
+  mini-player = song + artist in native equal-style rows; Dashboard = song +
+  artist in native title/secondary rows; full player = song + artist + station
+  title in the native third/album row.
+- Updated the Node smoke test to verify the native slots, no manual mini-player
+  styling, preservation of all station artwork fields, and full-player station
+  title correction after an OSD re-render.
+- Node syntax and smoke tests pass. This is not a C# compilation or a live
+  Emby verification; the updated DLL must be built and visually tested on the
+  user's Windows Emby instance.
+
+
+NATIVE SLOT ALIGNMENT AND LEGACY MINI-ARTIST COLOR CLEANUP — REVISION 7
+------------------------------------------------------------------------
+- User confirmed that the station logo remains visible in remote Firefox. This
+  revision does not alter any original .strm artwork tags, image IDs, aspect
+  ratio, blur hashes, or album-art fallback data.
+- Mini-player: the prior Display Polish revision added the `secondaryText`
+  class and normal-weight styling to the artist line. That was not Emby's native
+  mini-player appearance. The embedded integration now removes only those
+  legacy color/weight overrides from the second native now-playing row while
+  retaining its current line placement and native row classes. It does not add
+  grey styling.
+- Full player: Emby's native song and artist rows remain untouched. The station
+  .strm name is written into `.videoOsdThirdTitle`, the native third/album row,
+  instead of duplicating the artist. A scoped MutationObserver re-applies the
+  station name if Emby's OSD refresh writes stale album/artist content or hides
+  that row.
+- Dashboard Now Playing: song and artist remain in separate native card rows.
+  Existing classes and inline styles are preserved; only an empty runtime
+  placeholder row is collapsed. This avoids a custom nested title block and
+  prevents an empty third line from increasing card height.
+- The change is limited to the DLL-embedded display integration and its smoke
+  tests. The metadata reader, server session matching, player-state publishing,
+  artwork fields, stream URL, and .strm playback path are unchanged.
+- Node syntax and simulated native-slot regression tests pass. C# compilation
+  and live visual behavior must still be verified in the user's Windows Emby
+  instance; this package is source code, not a compiled DLL.
+
+
+DASHBOARD STATION TITLE IN NATIVE THIRD ROW — REVISION 8
+--------------------------------------------------------
+- User requested the original .strm station title below the song and artist in
+  the Dashboard Now Playing card. The existing Emby ActiveSession card creates
+  three native text rows: item title, artist, and runtime/progress text.
+- Live radio .strm sessions have no useful track runtime. Radio Meta now uses
+  that existing third row for the station title instead of collapsing the empty
+  placeholder. This preserves the same three-line card geometry used by native
+  MP3 playback, including the lower text position the user noted.
+- Song and artist remain in their native first and second rows. The station
+  row retains Emby's existing cardText-secondary and innerFooter-cardText
+  classes and inline styles; no custom size, color, margin, or vertical offset
+  is added.
+- The original row content/style is saved and restored when the integration
+  releases the card. Dynamically-created fallback rows are also removed on
+  restoration. The mini-player, full-player, artwork, metadata backend, session
+  matching, and .strm playback path are unchanged.
+- Updated the Node smoke test to assert song, artist, and station occupy the
+  three native Dashboard rows and that the station row remains visible.
+- Live visual verification is still required in Emby.
+
+
+PROMOTION OUTCOME
+-----------------
+This experiment was later promoted back into the 1.3 mainline in v1.3.127 after
+the user verified live song/artist updates in the Emby mini-player, full player,
+and Dashboard Now Playing; stable station artwork in remote Firefox; and the
+Dashboard station title in its native third row. The original 1.9 version label
+is retained here only as historical branch context.

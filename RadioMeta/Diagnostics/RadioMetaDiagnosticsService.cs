@@ -17,13 +17,11 @@ public sealed class RadioMetaDiagnosticsHealthResponse
     public bool Available { get; set; }
     public string Error { get; set; } = string.Empty;
     public string PluginVersion { get; set; } = string.Empty;
+    public bool PlayerIntegrationBootstrapInstalled { get; set; }
+    public bool PlayerIntegrationResourceEmbedded { get; set; }
+    public string PlayerIntegrationInstallStatus { get; set; } = string.Empty;
     public bool ConfigurationAvailable { get; set; }
     public bool HistoryStoreInitialized { get; set; }
-    public bool DisplayHelperResourceEmbedded { get; set; }
-    public string DisplayHelperResourceName { get; set; } = string.Empty;
-    public bool DisplayLoaderResourceEmbedded { get; set; }
-    public string DisplayLoaderResourceName { get; set; } = string.Empty;
-
     public bool AutomaticStationDetection { get; set; }
     public bool StationFolderConfigured { get; set; }
     public bool StationFolderAvailable { get; set; }
@@ -170,9 +168,6 @@ public sealed class GetRadioMetaDiagnosticsHealth : IReturn<RadioMetaDiagnostics
 [Authenticated(Roles = "Admin")]
 public sealed class RadioMetaDiagnosticsHealthService : IService
 {
-    private const string DisplayHelperResource = "RadioMeta.WebUI.RadioMetaIntegratedDisplay.js";
-    private const string DisplayLoaderResource = "RadioMeta.WebUI.RadioMetaDisplayLoader.js";
-
     public object Get(GetRadioMetaDiagnosticsHealth request)
     {
         var plugin = RadioMetaPlugin.Instance;
@@ -187,7 +182,6 @@ public sealed class RadioMetaDiagnosticsHealthService : IService
 
         var assembly = plugin.GetType().Assembly;
         var version = assembly.GetName().Version?.ToString() ?? "unknown";
-        var resourceNames = assembly.GetManifestResourceNames();
         var configuredFolder = plugin.GetConfiguredStationFolder();
         var resolvedFolder = plugin.GetStationFolder();
         var automatic = configuredFolder.Length == 0;
@@ -289,12 +283,12 @@ public sealed class RadioMetaDiagnosticsHealthService : IService
         {
             Available = true,
             PluginVersion = version,
+            PlayerIntegrationBootstrapInstalled = RadioMetaPlayerIntegration.IsInstalled,
+            PlayerIntegrationResourceEmbedded = assembly.GetManifestResourceNames().Any(name =>
+                string.Equals(name, "RadioMeta.WebUI.RadioMetaPlayerIntegration.js", StringComparison.Ordinal)),
+            PlayerIntegrationInstallStatus = RadioMetaPlayerIntegration.InstallStatus,
             ConfigurationAvailable = plugin.Configuration is not null,
             HistoryStoreInitialized = plugin.HistoryStore is not null,
-            DisplayHelperResourceEmbedded = resourceNames.Contains(DisplayHelperResource, StringComparer.Ordinal),
-            DisplayHelperResourceName = DisplayHelperResource,
-            DisplayLoaderResourceEmbedded = resourceNames.Contains(DisplayLoaderResource, StringComparer.Ordinal),
-            DisplayLoaderResourceName = DisplayLoaderResource,
             AutomaticStationDetection = automatic,
             StationFolderConfigured = !automatic,
             StationFolderAvailable = stationFolderAvailable,

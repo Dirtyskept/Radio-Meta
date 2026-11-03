@@ -1,5 +1,4 @@
     return function (view) {
-        ensureIntegratedDisplayHelperForDashboard();
         var refreshTimer = null;
         var requestInProgress = false;
         var historyReloadPending = false;

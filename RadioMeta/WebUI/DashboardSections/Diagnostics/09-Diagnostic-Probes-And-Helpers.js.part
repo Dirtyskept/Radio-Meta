@@ -9,17 +9,6 @@
             return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
         }
 
-        function diagnosticVisible(element) {
-            if (!element || !element.isConnected) return false;
-            var rect = element.getBoundingClientRect();
-            if (rect.width <= 0 || rect.height <= 0) return false;
-            for (var node = element; node && node.nodeType === 1; node = node.parentElement) {
-                var style = window.getComputedStyle(node);
-                if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) === 0) return false;
-            }
-            return true;
-        }
-
         function diagnosticProviderValue(item, wantedName) {
             var providerIds = diagnosticValue(item, 'ProviderIds', 'providerIds');
             if (!providerIds || typeof providerIds !== 'object') return '';
@@ -43,16 +32,6 @@
             message = message.replace(/([?&](?:X-Emby-Token|api_key|access_token|token)=)[^&\s]+/gi, '$1[REDACTED]');
             message = message.replace(/https?:\/\/[^\s'"<>]+/gi, '[URL]');
             return message.slice(0, 220);
-        }
-
-        function diagnosticContainsTrack(text, track, includeStation) {
-            var normalized = diagnosticNormalize(text);
-            if (!normalized || !track || !track.song || !track.artist) return false;
-            if (normalized.indexOf(diagnosticNormalize(track.song)) < 0 ||
-                normalized.indexOf(diagnosticNormalize(track.artist)) < 0) return false;
-            if (includeStation && track.station &&
-                normalized.indexOf(diagnosticNormalize(track.station)) < 0) return false;
-            return true;
         }
 
         function diagnosticGetJson(path, timeoutMs) {
@@ -81,58 +60,6 @@
                     window.clearTimeout(timeout);
                     reject(error || new Error('Request failed'));
                 }
-            });
-        }
-
-        // Probe both known display-resource URLs automatically. The old __plugin
-        // path is diagnostic-only; ConfigurationPage is the supported embedded-resource route.
-        function diagnosticProbeDisplayResources(timeoutMs) {
-            function probe(path) {
-                return new Promise(function (resolve) {
-                    var finished = false;
-                    var timer = window.setTimeout(function () {
-                        if (finished) return;
-                        finished = true;
-                        resolve({ path: path, ok: false, status: 0, contentType: '', bytes: 0, looksLikeModule: false, error: 'Request timed out' });
-                    }, timeoutMs || 6000);
-                    try {
-                        window.fetch(path, { method: 'GET', credentials: 'same-origin', cache: 'no-store' })
-                            .then(function (response) {
-                                return response.text().then(function (body) {
-                                    if (finished) return;
-                                    finished = true;
-                                    window.clearTimeout(timer);
-                                    var contentType = response.headers.get('content-type') || '';
-                                    resolve({
-                                        path: path,
-                                        ok: response.ok,
-                                        status: response.status,
-                                        contentType: contentType,
-                                        bytes: body.length,
-                                        looksLikeModule: /javascript|ecmascript/i.test(contentType) && /define\s*\(/.test(body),
-                                        error: ''
-                                    });
-                                });
-                            })
-                            .catch(function (error) {
-                                if (finished) return;
-                                finished = true;
-                                window.clearTimeout(timer);
-                                resolve({ path: path, ok: false, status: 0, contentType: '', bytes: 0, looksLikeModule: false, error: String(error && error.message ? error.message : error || 'Request failed') });
-                            });
-                    } catch (error) {
-                        if (finished) return;
-                        finished = true;
-                        window.clearTimeout(timer);
-                        resolve({ path: path, ok: false, status: 0, contentType: '', bytes: 0, looksLikeModule: false, error: String(error && error.message ? error.message : error || 'Request failed') });
-                    }
-                });
-            }
-            return Promise.all([
-                probe('/web/__plugin/RadioMetaIntegratedDisplay.js'),
-                probe('/web/ConfigurationPage?name=RadioMetaIntegratedDisplay.js')
-            ]).then(function (results) {
-                return { legacy: results[0], embedded: results[1] };
             });
         }
 
