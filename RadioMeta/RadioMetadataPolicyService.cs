@@ -304,19 +304,6 @@ internal sealed class RadioMetadataPolicyService
                     : "Automatic";
 
     /// <summary>
-    /// Returns true when the applicable station/device rule uses Carplay mode.
-    /// Carplay transition-clearing behavior is intentionally distinct from StationDelay.
-    /// </summary>
-    public bool IsStationCarplayMode(string? stationName, string? deviceName = null)
-    {
-        var rule = FindApplicableStationMetadataRule(stationName, deviceName);
-        return string.Equals(
-            (rule?.Mode ?? string.Empty).Trim(),
-            "Carplay",
-            StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
     /// Returns true for the station-scoped delay mode. It uses normal metadata
     /// lookup but accepts the first valid track immediately after entering the
     /// station; the configured stability delay applies to later track changes.

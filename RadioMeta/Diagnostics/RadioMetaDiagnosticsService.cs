@@ -52,6 +52,7 @@ public sealed class RadioMetaDiagnosticsHealthResponse
     public List<RadioMetaDiagnosticTrackDto> CurrentTracks { get; set; } = new();
     public List<RadioMetaDiagnosticEventDto> RecentEvents { get; set; } = new();
     public List<RadioMetaStationOperationEventDto> RecentStationOperations { get; set; } = new();
+    public List<RadioMetaSettingsSaveEventDto> RecentSettingsSaves { get; set; } = new();
     public RadioMetaProxyDiagnosticDto Proxy { get; set; } = new();
     public RadioMetaMetadataCacheDiagnosticDto MetadataCache { get; set; } = new();
     public RadioMetaArtworkDiagnosticDto ArtworkDownloads { get; set; } = new();
@@ -319,6 +320,7 @@ public sealed class RadioMetaDiagnosticsHealthService : IService
             CurrentTracks = tracks,
             RecentEvents = plugin.DiagnosticEvents.GetRecent(40),
             RecentStationOperations = plugin.StationOperationEvents.GetRecent(20),
+            RecentSettingsSaves = plugin.SettingsSaveEvents.GetRecent(10),
             Proxy = proxyDiagnostics,
             MetadataCache = metadataCacheDiagnostics,
             ArtworkDownloads = artworkDownloadDiagnostics,

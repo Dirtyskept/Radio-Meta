@@ -196,7 +196,7 @@ public sealed partial class RadioMetadataReader
             return Failure("Invalid station file path (" + ex.GetType().Name + ").");
         }
 
-        if (!File.Exists(fullStationPath))
+        if (!File.Exists(fullStationPath) && !RadioWebStreamStations.IsVirtualStation(fullStationPath))
         {
             return Failure("Station file was not found.");
         }

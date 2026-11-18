@@ -22,6 +22,9 @@ public sealed class RadioPlayHistoryEntryDto
     public string SongTitle { get; set; } = string.Empty;
     public string OriginalSongTitle { get; set; } = string.Empty;
     public DateTimeOffset PlayedAt { get; set; }
+    // The station's current Emby library name, shown in History. StationName stays
+    // the .strm file name, which corrections and rules use.
+    public string DisplayStationName { get; set; } = string.Empty;
 }
 
 [Route("/RadioMeta/History", "GET")]
@@ -165,6 +168,8 @@ public sealed class RadioPathSettingsResponse
     public string ResolvedFfprobePath { get; set; } = string.Empty;
     public bool FfprobeAvailable { get; set; }
     public bool EnableAdaptiveMetadataRouting { get; set; } = true;
+    // Also read metadata for audio .strm stations outside the station folder.
+    public bool EnableStationsOutsideFolder { get; set; } = true;
 }
 
 [Route("/RadioMeta/PathSettings", "GET")]
@@ -182,6 +187,8 @@ public sealed class SaveRadioPathSettings : IReturn<RadioPathSettingsResponse>
     // Nullable so older dashboard clients which do not send this adaptive-routing field
     // preserve the currently saved value instead of silently turning routing back on.
     public bool? EnableAdaptiveMetadataRouting { get; set; }
+    // Nullable for the same reason: older dashboards keep the saved value.
+    public bool? EnableStationsOutsideFolder { get; set; }
 }
 
 public sealed class RadioCurrentTrackDto
@@ -198,10 +205,23 @@ public sealed class RadioCurrentTrackDto
 public sealed class RadioCurrentTracksResponse
 {
     public string Error { get; set; } = string.Empty;
+    // The running plugin version, so a browser can tell when its cached player
+    // script is older than the server's (it then shows a Ctrl+F5 reminder).
+    public string PluginVersion { get; set; } = RadioMetaBuildInfo.Version;
     public List<RadioCurrentTrackDto> Items { get; set; } = new();
 }
 
+// Admin-only: every active session's current track, for Radio Meta Diagnostics.
 [Route("/RadioMeta/CurrentTracks", "GET")]
+[Authenticated(Roles = "Admin")]
 public sealed class GetRadioCurrentTracks : IReturn<RadioCurrentTracksResponse>
+{
+}
+
+// Any signed-in user: the current tracks of the caller's own sessions only
+// (admins receive every session). Used by the embedded player as a fallback.
+[Route("/RadioMeta/MyCurrentTracks", "GET")]
+[Authenticated]
+public sealed class GetRadioMyCurrentTracks : IReturn<RadioCurrentTracksResponse>
 {
 }

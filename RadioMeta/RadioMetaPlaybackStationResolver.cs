@@ -46,28 +46,37 @@ internal sealed class RadioMetaPlaybackStationResolver
             }
 
             var folder = _plugin.GetStationFolder();
-            if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+            if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder) &&
+                IsInsideFolder(NormalizePath(folder), normalizedPath))
             {
-                return null;
+                return normalizedPath;
             }
 
-            var normalizedFolder = NormalizePath(folder);
-            var relative = Path.GetRelativePath(normalizedFolder, normalizedPath);
-
-            if (Path.IsPathRooted(relative) ||
-                relative.Equals("..", StringComparison.Ordinal) ||
-                relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
-                relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
+            // Outside the station folder (for example a library made by another
+            // plugin), use the automatic-mode rule when that option is on. This only
+            // classifies the playing item; other folders are never listed, scanned
+            // or edited.
+            if (_plugin.Configuration?.EnableStationsOutsideFolder ?? true)
             {
-                return null;
+                return IsAudioMediaItem(item) ? normalizedPath : null;
             }
 
-            return normalizedPath;
+            return null;
         }
         catch
         {
             return null;
         }
+    }
+
+    /// <summary>True when the path is inside the folder (at any depth), never outside it via "..".</summary>
+    private static bool IsInsideFolder(string normalizedFolder, string normalizedPath)
+    {
+        var relative = Path.GetRelativePath(normalizedFolder, normalizedPath);
+        return !(Path.IsPathRooted(relative) ||
+                 relative.Equals("..", StringComparison.Ordinal) ||
+                 relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+                 relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal));
     }
 
     private static bool IsAudioMediaItem(object? item)
@@ -198,8 +207,17 @@ internal sealed class RadioMetaPlaybackStationResolver
         .Where(path => !string.IsNullOrWhiteSpace(path))
         .ToArray();
 
-        return paths.Any(path => PathsEqual(path!, stationPath));
+        return paths.Any(path => PathsEqual(path!, stationPath)) ||
+            RadioWebStreamStations.SessionUsesStation(playSession, stationPath);
     }
+
+    /// <summary>
+    /// True when an item belongs to the station: its path is the station's .strm,
+    /// or it is the Emby item of a virtual web-stream station (which has no path).
+    /// </summary>
+    internal bool ItemBelongsToStation(string? itemPath, object? item, string stationPath) =>
+        (!string.IsNullOrWhiteSpace(itemPath) && PathsEqual(itemPath!, stationPath)) ||
+        RadioWebStreamStations.ItemMatches(stationPath, item);
 
     internal bool IsStrmPath(string path) =>
         Path.GetExtension(path).Equals(

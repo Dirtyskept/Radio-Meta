@@ -88,7 +88,7 @@ internal static class RadioStationArtworkDownloader
                     return Fail("Logo URLs must resolve to a publicly routable HTTP(S) host. Local/private network destinations are blocked.");
 
                 using var request = new HttpRequestMessage(HttpMethod.Get, current);
-                request.Headers.UserAgent.ParseAdd("RadioMeta/1.3.98 artwork-fetch");
+                request.Headers.UserAgent.ParseAdd(RadioMetaBuildInfo.UserAgent("artwork-fetch"));
                 using var response = await Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
 
                 if ((int)response.StatusCode is 301 or 302 or 303 or 307 or 308)

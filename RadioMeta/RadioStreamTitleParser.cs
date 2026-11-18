@@ -1,5 +1,6 @@
 using System;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace RadioMeta;
 
@@ -77,6 +78,12 @@ internal static class RadioStreamTitleParser
             return false;
         }
 
+        // Ads, promos and break markers are never treated as a song.
+        if (IsNonSongMarker(normalizedStreamTitle.Trim()))
+        {
+            return false;
+        }
+
         return true;
     }
 
@@ -113,16 +120,128 @@ internal static class RadioStreamTitleParser
             return (string.Empty, string.Empty);
         }
 
+        // Stream-title formats, tried in order. Each recognizer handles one
+        // format and returns false when the title is not in that format. To
+        // support a new format, add one recognizer here, with tests.
+        if (TryIHeartTextFormat(normalizedTitle, out var parsed) ||
+            TryTitleArtistKeyValueFormat(normalizedTitle, out parsed) ||
+            TryTildeFormat(normalizedTitle, out parsed) ||
+            TryDoublePipeFormat(normalizedTitle, out parsed) ||
+            TryDashFormat(normalizedTitle, out parsed))
+        {
+            return parsed;
+        }
+
+        // No recognizable format: show the whole value as the song title.
+        return (string.Empty, normalizedTitle.Trim());
+    }
+
+    // ---- Stream-title format recognizers ------------------------------------
+
+    // iHeartRadio / WideOrbit cart record: the title is in text="...", and the
+    // artist comes before " - text=" or " | text=":
+    //   Ed Sheeran - text="Bad Habits" song_spot="M" MediaBaseId="2720462" ...
+    private static readonly Regex IHeartTextRegex = new(
+        @"^(?<artist>.*?)\s*(?:-|\|)\s*text=""(?<title>[^""]*)""",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+    // iHeartRadio key-value variant:
+    //   title="SOMETHING JUST LIKE THIS",artist="Chainsmokers / Coldplay",url="..."
+    private static readonly Regex TitleArtistKeyValueRegex = new(
+        @"^\s*title=""(?<title>[^""]*)""\s*,\s*artist=""(?<artist>[^""]*)""",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+    // iHeartRadio spot type: song_spot="T" marks traffic (ads and promos).
+    private static readonly Regex IHeartTrafficSpotRegex = new(
+        @"\bsong_spot\s*=\s*""T""",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    // Broadcast-automation fields need at least this many '~' fields, so an
+    // ordinary title that merely contains a '~' is left alone.
+    private const int MinimumTildeFields = 4;
+
+    /// <summary>
+    /// Ads, promos and break markers, never shown as a song:
+    /// "*" / "#" (ad break start/end); "##..." (Triton TildeATS events);
+    /// iHeartRadio traffic spots (song_spot="T"); and iHeartRadio records with
+    /// no artist, such as " - text="Spot Block End"".
+    /// </summary>
+    private static bool IsNonSongMarker(string value)
+    {
+        if (value == "*" || value == "#" || value.StartsWith("##", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (IHeartTrafficSpotRegex.IsMatch(value))
+        {
+            return true;
+        }
+
+        var iHeart = IHeartTextRegex.Match(value);
+        if (iHeart.Success && iHeart.Groups["artist"].Value.Trim().Length == 0)
+        {
+            return true;
+        }
+
+        var keyValue = TitleArtistKeyValueRegex.Match(value);
+        return keyValue.Success && keyValue.Groups["artist"].Value.Trim().Length == 0;
+    }
+
+    private static bool TryIHeartTextFormat(string value, out (string Artist, string SongTitle) parsed)
+    {
+        parsed = default;
+        var match = IHeartTextRegex.Match(value);
+        if (!match.Success) return false;
+        return TryUse(match.Groups["artist"].Value, match.Groups["title"].Value, out parsed);
+    }
+
+    private static bool TryTitleArtistKeyValueFormat(string value, out (string Artist, string SongTitle) parsed)
+    {
+        parsed = default;
+        var match = TitleArtistKeyValueRegex.Match(value);
+        if (!match.Success) return false;
+        return TryUse(match.Groups["artist"].Value, match.Groups["title"].Value, out parsed);
+    }
+
+    // Broadcast-automation '~' fields, artist first and title second:
+    //   R101:            DAFT PUNK~ONE MORE TIME~DISCOVERY~2000~~231~...~R101
+    //   Triton TildeATS: Billie Eilish ~ Bad Guy ~ 246 ~ 0 ^
+    private static bool TryTildeFormat(string value, out (string Artist, string SongTitle) parsed)
+    {
+        parsed = default;
+        var fields = value.TrimEnd().TrimEnd('^').Split('~');
+        if (fields.Length < MinimumTildeFields) return false;
+        return TryUse(fields[0], fields[1], out parsed);
+    }
+
+    // Double-pipe fields, artist first and title second:
+    //   MADONNA || Beautiful Stranger || S
+    private static bool TryDoublePipeFormat(string value, out (string Artist, string SongTitle) parsed)
+    {
+        parsed = default;
+        var fields = value.Split("||", StringSplitOptions.None);
+        if (fields.Length < 2) return false;
+        return TryUse(fields[0], fields[1], out parsed);
+    }
+
+    // The standard "Artist - Title" (also en/em dashes). The earliest separator
+    // is used, so later dashes stay in the title. Extra text after " | " is
+    // dropped from the title: "Artist - Title | Visit our website".
+    private static bool TryDashFormat(string value, out (string Artist, string SongTitle) parsed)
+    {
+        parsed = default;
+
         // Split the normalized value, not the original encoded input. Keep the
         // rest of the title intact, including any later hyphens or dashes.
         var separatorIndex = -1;
         var separatorLength = 0;
         foreach (var candidate in ArtistTitleSeparators)
         {
-            var candidateIndex = normalizedTitle.IndexOf(
+            var candidateIndex = value.IndexOf(
                 candidate, StringComparison.Ordinal);
             if (candidateIndex <= 0 ||
-                candidateIndex + candidate.Length >= normalizedTitle.Length)
+                candidateIndex + candidate.Length >= value.Length)
             {
                 continue;
             }
@@ -134,15 +253,26 @@ internal static class RadioStreamTitleParser
             }
         }
 
-        if (separatorIndex >= 0)
+        if (separatorIndex < 0) return false;
+
+        var artist = value[..separatorIndex].Trim();
+        var title = value[(separatorIndex + separatorLength)..].Trim();
+        var pipeIndex = title.IndexOf(" | ", StringComparison.Ordinal);
+        if (pipeIndex > 0)
         {
-            return (
-                normalizedTitle[..separatorIndex].Trim(),
-                normalizedTitle[(separatorIndex + separatorLength)..].Trim());
+            title = title[..pipeIndex].Trim();
         }
 
-        // If the station supplies a title without a recognizable
-        // separator, show it as the song title.
-        return (string.Empty, normalizedTitle.Trim());
+        parsed = (artist, title);
+        return true;
+    }
+
+    // Accepts a recognized artist/title only when both are present.
+    private static bool TryUse(string artist, string title, out (string Artist, string SongTitle) parsed)
+    {
+        artist = (artist ?? string.Empty).Trim();
+        title = (title ?? string.Empty).Trim();
+        parsed = (artist, title);
+        return artist.Length > 0 && title.Length > 0;
     }
 }

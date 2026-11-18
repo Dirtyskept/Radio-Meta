@@ -28,6 +28,12 @@
                 return;
             }
 
+            var stationEdit = target.closest('button[data-station-mode-edit]');
+            if (stationEdit) {
+                openStationModeDialog(stationEdit.getAttribute('data-station-mode-edit'));
+                return;
+            }
+
             var stationRemove = target.closest('button[data-station-mode-remove]');
             if (stationRemove) {
                 removeStationModeRule(stationRemove.getAttribute('data-station-mode-remove'));
@@ -57,13 +63,149 @@
                 return;
             }
 
-            var nextRules = ignoreRules.filter(function (_rule, ruleIndex) {
-                return ruleIndex !== index;
+            var removedRule = ignoreRules[index];
+            var removedStation = getRuleStation(removedRule);
+            radioMetaConfirm('Remove the ignore phrase "' + getRulePhrase(removedRule) + '" (' +
+                (removedStation ? 'station ' + removedStation : 'all stations') + ')? Titles containing it will be shown again.',
+                'Remove phrase').then(function (confirmed) {
+                if (!confirmed) return;
+                // The list may have changed while the question was open; remove by content.
+                var nextRules = ignoreRules.filter(function (rule) { return rule !== removedRule; });
+                if (nextRules.length === ignoreRules.length) return;
+                saveIgnoreRules(nextRules, 'Ignore phrase removed and saved.', false);
             });
-            saveIgnoreRules(nextRules, 'Ignore phrase removed and saved.', false);
+        }
+
+        // ---------------------------------------------------------------
+        // Tabs (1.3.152). Emby's own header tabs (maintabsmanager), as on
+        // Emby's admin pages; if that module is not available, the same tabs
+        // are shown at the top of the page. The selected tab is kept in the
+        // page address (&tab=...), so Back and reloading keep it.
+        // ---------------------------------------------------------------
+        var RADIO_META_TABS = [
+            { key: 'stations', name: 'Stations' },
+            { key: 'history', name: 'History' },
+            { key: 'rules', name: 'Metadata Rules' },
+            { key: 'settings', name: 'Settings' },
+            { key: 'diagnostics', name: 'Diagnostics' }
+        ];
+        var radioMetaCurrentTab = -1;
+        var radioMetaHeaderTabs = false;
+
+        function radioMetaTabPanels() {
+            return RADIO_META_TABS.map(function (tab) {
+                return view.querySelector('.radioMetaTab[data-tab="' + tab.key + '"]');
+            });
+        }
+
+        function radioMetaTabIndex(key) {
+            for (var i = 0; i < RADIO_META_TABS.length; i++) {
+                if (RADIO_META_TABS[i].key === key) return i;
+            }
+            return -1;
+        }
+
+        function radioMetaTabFromAddress() {
+            var match = /[?&]tab=([a-z]+)/.exec(String(window.location.hash || ''));
+            var index = match ? radioMetaTabIndex(match[1]) : -1;
+            return index >= 0 ? index : 0;
+        }
+
+        function rememberRadioMetaTab(key) {
+            try {
+                var hash = String(window.location.hash || '');
+                if (!hash) return;
+                var next = /[?&]tab=[a-z]*/.test(hash)
+                    ? hash.replace(/([?&])tab=[a-z]*/, '$1tab=' + key)
+                    : hash + (hash.indexOf('?') >= 0 ? '&' : '?') + 'tab=' + key;
+                if (next !== hash && window.history && typeof window.history.replaceState === 'function') {
+                    window.history.replaceState(window.history.state, '', window.location.href.split('#')[0] + next);
+                }
+            } catch (ignore) { }
+        }
+
+        // Each tab loads its contents when it is opened.
+        function onRadioMetaTabShown(key) {
+            if (key === 'stations') {
+                if (!stationFolderPanelVisible) toggleStationFolderVisibility();
+                else scanStationFolder();
+            } else if (key === 'history') {
+                if (!historyPanelVisible) toggleHistoryVisibility();
+                else loadHistory();
+            }
+        }
+
+        function showRadioMetaTab(index) {
+            if (!(index >= 0 && index < RADIO_META_TABS.length) || index === radioMetaCurrentTab) return;
+            radioMetaCurrentTab = index;
+            radioMetaTabPanels().forEach(function (panel, panelIndex) {
+                if (panel) panel.classList.toggle('is-active', panelIndex === index);
+            });
+            Array.prototype.slice.call(view.querySelectorAll('.radioMetaInPageTabs button')).forEach(function (button, buttonIndex) {
+                button.classList.toggle('emby-tab-button-active', buttonIndex === index);
+                button.setAttribute('aria-selected', buttonIndex === index ? 'true' : 'false');
+            });
+            rememberRadioMetaTab(RADIO_META_TABS[index].key);
+            onRadioMetaTabShown(RADIO_META_TABS[index].key);
+        }
+
+        function selectRadioMetaTab(key) {
+            var index = radioMetaTabIndex(key);
+            if (index < 0) return;
+            var tabs = radioMetaEmby.mainTabsManager;
+            if (radioMetaHeaderTabs && tabs && typeof tabs.selectedTabIndex === 'function') {
+                try { tabs.selectedTabIndex(index); } catch (ignore) { }
+            }
+            showRadioMetaTab(index);
+        }
+
+        function setUpRadioMetaTabs() {
+            var index = radioMetaTabFromAddress();
+            var inPageTabs = view.querySelector('.radioMetaInPageTabs');
+            var tabs = radioMetaEmby.mainTabsManager;
+            radioMetaHeaderTabs = false;
+            // Emby's header may report the first tab while setting up; the
+            // tab is (re)loaded once either way.
+            radioMetaCurrentTab = -1;
+            if (tabs && typeof tabs.setTabs === 'function') {
+                try {
+                    tabs.setTabs(view, index, function () {
+                        return RADIO_META_TABS.map(function (tab) { return { name: tab.name }; });
+                    }, radioMetaTabPanels, function (event) {
+                        var selected = event && event.detail ? Number(event.detail.selectedTabIndex) : NaN;
+                        if (!isNaN(selected)) showRadioMetaTab(selected);
+                    });
+                    radioMetaHeaderTabs = true;
+                } catch (error) {
+                    console.warn('Radio Meta: Emby header tabs are not available; using in-page tabs.', error);
+                }
+            }
+            if (inPageTabs) {
+                if (!radioMetaHeaderTabs && !inPageTabs.firstChild) {
+                    RADIO_META_TABS.forEach(function (tab, tabIndex) {
+                        var button = document.createElement('button');
+                        button.type = 'button';
+                        button.className = 'emby-button emby-tab-button';
+                        button.setAttribute('role', 'tab');
+                        button.textContent = tab.name;
+                        button.addEventListener('click', function () { showRadioMetaTab(tabIndex); });
+                        inPageTabs.appendChild(button);
+                    });
+                }
+                inPageTabs.classList.toggle('hide', radioMetaHeaderTabs);
+            }
+            showRadioMetaTab(index);
+        }
+
+        // Emby removes header tabs itself when the next page is shown
+        // (appheader, before that page appears), so they are not cleared here:
+        // doing it at viewhide could remove the next page's own tabs.
+        function clearRadioMetaTabs() {
+            closeRadioMetaDialogs();
         }
 
         function onViewShow() {
+            radioMetaModulesReady.then(setUpRadioMetaTabs);
             if (historyPanelVisible) loadHistory();
             loadStationModes();
             loadIgnorePhrases();
@@ -79,6 +221,7 @@
         }
 
         function onViewHide() {
+            clearRadioMetaTabs();
             if (refreshTimer !== null) {
                 window.clearInterval(refreshTimer);
                 refreshTimer = null;
@@ -86,12 +229,12 @@
         }
 
         function createStationFile() {
-            var nameInput = view.querySelector('#radioStationCreateName');
-            var urlInput = view.querySelector('#radioStationCreateUrl');
-            var artworkInput = view.querySelector('#radioStationCreateArtworkUrl');
-            var proxyInput = view.querySelector('#radioStationCreateUseProxy');
-            var button = view.querySelector('#radioStationCreateButton');
-            var status = view.querySelector('#radioStationCreateStatus');
+            var nameInput = radioMetaById('radioStationCreateName');
+            var urlInput = radioMetaById('radioStationCreateUrl');
+            var artworkInput = radioMetaById('radioStationCreateArtworkUrl');
+            var proxyInput = radioMetaById('radioStationCreateUseProxy');
+            var button = radioMetaById('radioStationCreateButton');
+            var status = radioMetaById('radioStationCreateStatus');
             if (!nameInput || !urlInput || !artworkInput || !button || !status || button.disabled) return;
             var name = nameInput.value.trim();
             var streamUrl = urlInput.value.trim();
@@ -120,6 +263,7 @@
                         (artworkPath ? '. Logo saved: ' + artworkPath : (artworkUrl ? '. Logo URL was supplied.' : '. No logo supplied.')) +
                         (logoWarning ? ' ' + logoWarning : '');
                     status.textContent = createdMessage + ' Resolving targeted Emby library refresh...';
+                    closeRadioMetaDialogs('radioStationCreateForm');
                     nameInput.value = '';
                     urlInput.value = '';
                     artworkInput.value = '';

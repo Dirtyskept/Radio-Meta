@@ -14,6 +14,8 @@ public sealed class RadioMetaSessionTitleInjector : IDisposable
     private readonly RadioMetaPlugin _plugin;
     private readonly ISessionManager _sessionManager;
     private readonly ILogger _logger;
+    private readonly IMediaSourceManager? _mediaSourceManager;
+    private readonly IUserManager? _userManager;
 
     private readonly RadioMetaPlaybackSessionStateStore _sessionState = new();
     private readonly RadioMetaPlaybackStationResolver _stationResolver;
@@ -24,11 +26,15 @@ public sealed class RadioMetaSessionTitleInjector : IDisposable
     public RadioMetaSessionTitleInjector(
         RadioMetaPlugin plugin,
         ISessionManager sessionManager,
-        ILogger logger)
+        ILogger logger,
+        IMediaSourceManager? mediaSourceManager = null,
+        IUserManager? userManager = null)
     {
         _plugin = plugin;
         _sessionManager = sessionManager;
         _logger = logger;
+        _mediaSourceManager = mediaSourceManager;
+        _userManager = userManager;
         _stationResolver = new RadioMetaPlaybackStationResolver(plugin);
         _metadataProcessor = new RadioMetaSessionMetadataProcessor(
             plugin, logger, _sessionState, _stationResolver);
@@ -85,14 +91,36 @@ public sealed class RadioMetaSessionTitleInjector : IDisposable
             .Where(candidate => !string.IsNullOrWhiteSpace(candidate.Path))
             .ToArray();
 
+            var stationPath = candidates
+                .Select(candidate => _stationResolver.ResolveStationPath(candidate.Path, candidate.Item))
+                .FirstOrDefault(path => path is not null);
+
+            // No .strm station: audio played from a web address with no .strm file
+            // behind it (for example WebStreams) gets a virtual station. Never for an
+            // item that is a .strm, so curated and Radio-plugin stations are unchanged.
+            if (stationPath is null &&
+                !candidates.Any(candidate => candidate.Path is not null && _stationResolver.IsStrmPath(candidate.Path)))
+            {
+                if (RadioWebStreamStations.TryResolve(_plugin, sessionKey, args, out var webStationPath, out var webItem))
+                {
+                    stationPath = webStationPath;
+                    candidates = candidates.Append((Path: (string?)webStationPath, Item: webItem)).ToArray();
+                }
+                else
+                {
+                    // Emby doesn't put a web stream's address on the playback event.
+                    // Ask Emby for the item's media sources once, in the background,
+                    // as "Add to Radio Meta" does through PlaybackInfo. This event
+                    // never waits; a later progress event picks up the station.
+                    RadioWebStreamStations.BeginAddressLookup(
+                        _plugin, _mediaSourceManager, _userManager, session, args, _logger);
+                }
+            }
+
             if (candidates.Length == 0)
             {
                 return;
             }
-
-            var stationPath = candidates
-                .Select(candidate => _stationResolver.ResolveStationPath(candidate.Path, candidate.Item))
-                .FirstOrDefault(path => path is not null);
 
             if (stationPath is null)
             {
@@ -180,6 +208,13 @@ public sealed class RadioMetaSessionTitleInjector : IDisposable
             // Do not start a lookup while Emby has no hydrated item. The station path and policy
             // are already recorded; the next progress event will retry once the item is present.
             if (currentItem is null)
+            {
+                return;
+            }
+
+            // A web stream that showed no song data at all (no ICY header and
+            // nothing from FFprobe) is not asked again for a while.
+            if (RadioWebStreamStations.IsResting(stationPath))
             {
                 return;
             }

@@ -120,6 +120,7 @@ internal sealed class RadioMetaSessionMetadataProcessor
 
                 if (hasNetworkMetadata)
                 {
+                    RadioWebStreamStations.MarkLookupFoundMetadata(stationPath);
                     metadataSource = "Station HTTP/ICY";
                     _logger.Info("Usable radio metadata was obtained from the station HTTP/ICY path.");
                     _sessionState.MarkInitialDelayCompleted(sessionKey);
@@ -182,6 +183,12 @@ internal sealed class RadioMetaSessionMetadataProcessor
                             RadioMetadataReader.IsUsableStreamTitle(metadata.SongTitle))
                         {
                             _logger.Info("Usable radio metadata was obtained from the FFprobe fallback.");
+                            RadioWebStreamStations.MarkLookupFoundMetadata(stationPath);
+                        }
+                        else
+                        {
+                            // Only rests a web stream that also sent no ICY header.
+                            RadioWebStreamStations.MarkLookupFoundNothing(stationPath);
                         }
                     }
 
@@ -304,7 +311,27 @@ internal sealed class RadioMetaSessionMetadataProcessor
                     "Could not publish canonical radio track metadata: the active session item does not expose a writable ProviderIds dictionary.");
             }
 
-            if (_plugin.CurrentTrackService.RecordAcceptedTrack(currentTrack, shouldRecordHistory))
+            // History shows the station's Emby library name. Use the library item only
+            // when it is this exact .strm, never a stale item from a previous station.
+            long libraryItemId = 0;
+            string? libraryName = null;
+            try
+            {
+                var libraryItem = playSession?.FullNowPlayingItem;
+                if (libraryItem is not null &&
+                    _stationResolver.ItemBelongsToStation(libraryItem.Path, libraryItem, stationPath))
+                {
+                    libraryItemId = libraryItem.InternalId;
+                    libraryName = libraryItem.Name;
+                }
+            }
+            catch
+            {
+                libraryItemId = 0;
+                libraryName = null;
+            }
+
+            if (_plugin.CurrentTrackService.RecordAcceptedTrack(currentTrack, shouldRecordHistory, libraryItemId, libraryName))
             {
                 _logger.Info("Radio play history recorded one track from the canonical current-track service.");
             }
@@ -423,8 +450,8 @@ internal sealed class RadioMetaSessionMetadataProcessor
             (Path: playSession.NowPlayingItem?.Path, Item: (object?)playSession.NowPlayingItem),
             (Path: playSession.FullNowPlayingItem?.Path, Item: (object?)playSession.FullNowPlayingItem)
         }
-        .Where(candidate => candidate.Item is not null && !string.IsNullOrWhiteSpace(candidate.Path) &&
-            _stationResolver.PathsEqual(candidate.Path!, stationPath))
+        .Where(candidate => candidate.Item is not null &&
+            _stationResolver.ItemBelongsToStation(candidate.Path, candidate.Item, stationPath))
         .Select(candidate => candidate.Item)
         .Cast<object?>()
         .ToArray();
@@ -461,7 +488,7 @@ internal sealed class RadioMetaSessionMetadataProcessor
 
                 var fullItem = liveSession.FullNowPlayingItem;
                 if (fullItem is not null && !ReferenceEquals(fullItem, currentItem) &&
-                    !string.IsNullOrWhiteSpace(fullItem.Path) && _stationResolver.PathsEqual(fullItem.Path, stationPath))
+                    _stationResolver.ItemBelongsToStation(fullItem.Path, fullItem, stationPath))
                 {
                     _plugin.CurrentTrackService.ClearPublishedMetadata(fullItem, sessionKey);
                 }

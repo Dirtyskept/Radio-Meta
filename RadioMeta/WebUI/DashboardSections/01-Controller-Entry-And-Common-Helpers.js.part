@@ -24,6 +24,208 @@
         var titleCorrectionsLoaded = false;
         var titleCleanupRulesLoaded = false;
 
+        // ---------------------------------------------------------------
+        // Native Emby look (1.3.152). Element lookup, dialogs, confirm and
+        // alert messages, fields and icons all use Emby's own modules when
+        // they are available, and fall back to plain browser equivalents.
+        // ---------------------------------------------------------------
+        var radioMetaEmby = {};
+        var radioMetaOpenDialogs = [];
+        var radioMetaModulesReady = (function () {
+            if (!window.Emby || typeof window.Emby.importModule !== 'function') return Promise.resolve();
+            function load(key, path) {
+                return window.Emby.importModule(path).then(function (module) {
+                    radioMetaEmby[key] = module && module.default ? module.default : module;
+                }).catch(function () { radioMetaEmby[key] = null; });
+            }
+            return Promise.all([
+                load('dialogHelper', './modules/dialoghelper/dialoghelper.js'),
+                load('confirm', './modules/common/dialogs/confirm.js'),
+                load('alert', './modules/common/dialogs/alert.js'),
+                load('mainTabsManager', './modules/maintabsmanager.js'),
+                load('embyInput', './modules/emby-elements/emby-input/emby-input.js'),
+                load('embySelect', './modules/emby-elements/emby-select/emby-select.js'),
+                load('embyToggle', './modules/emby-elements/emby-toggle/emby-toggle.js'),
+                load('embyButton', './modules/emby-elements/emby-button/emby-button.js'),
+                load('iconButton', './modules/emby-elements/emby-button/paper-icon-button-light.js'),
+                load('dialogCloseButton', './modules/emby-elements/emby-dialogclosebutton/emby-dialogclosebutton.js')
+            ]);
+        })();
+
+        // Elements are found in the page and in any open Radio Meta dialog
+        // (Emby places dialogs outside the page).
+        function radioMetaById(id) {
+            var element = view.querySelector('#' + id);
+            if (element) return element;
+            for (var i = 0; i < radioMetaOpenDialogs.length; i++) {
+                element = radioMetaOpenDialogs[i].element.querySelector('#' + id);
+                if (element) return element;
+            }
+            return null;
+        }
+
+        function radioMetaQueryAll(selector) {
+            var found = Array.prototype.slice.call(view.querySelectorAll(selector));
+            radioMetaOpenDialogs.forEach(function (entry) {
+                found = found.concat(Array.prototype.slice.call(entry.element.querySelectorAll(selector)));
+            });
+            return found;
+        }
+
+        // Opens content in an Emby dialog. options: title, content (element),
+        // key (to close it later), returnTo (element to put content back in),
+        // onClose. Returns { element, close }.
+        function openRadioMetaDialog(options) {
+            var helper = radioMetaEmby.dialogHelper;
+            var useEmby = !!(helper && typeof helper.createDialog === 'function' && typeof helper.open === 'function');
+            var dlg = useEmby
+                ? helper.createDialog({ removeOnClose: true, scrollY: false, size: 'small' })
+                : document.createElement('div');
+            var box = dlg;
+            if (!useEmby) {
+                dlg.className = 'radioMetaFallbackDialog';
+                box = document.createElement('div');
+                dlg.appendChild(box);
+            }
+            box.classList.add('formDialog');
+            var header = document.createElement('div');
+            header.className = 'formDialogHeader';
+            var closeButton = document.createElement('button', useEmby ? { is: 'emby-dialogclosebutton' } : undefined);
+            closeButton.type = 'button';
+            if (useEmby) closeButton.setAttribute('is', 'emby-dialogclosebutton');
+            else {
+                closeButton.className = 'paper-icon-button-light';
+                closeButton.innerHTML = '<i class="md-icon">close</i>';
+                closeButton.title = 'Close';
+            }
+            var title = document.createElement('h3');
+            title.className = 'formDialogHeaderTitle';
+            title.textContent = options.title || '';
+            header.appendChild(closeButton);
+            header.appendChild(title);
+            var content = document.createElement('div');
+            content.className = 'formDialogContent';
+            content.style.overflowY = 'auto';
+            var inner = document.createElement('div');
+            inner.className = 'dialogContentInner dialog-content-centered padded-left padded-right';
+            content.appendChild(inner);
+            if (options.content) inner.appendChild(options.content);
+            box.appendChild(header);
+            box.appendChild(content);
+
+            var entry = { element: dlg, key: options.key || '', closed: false, observers: [] };
+            // Status lines in the page are mirrored into the dialog while it is open.
+            Array.prototype.slice.call(inner.querySelectorAll('[data-mirror]')).forEach(function (target) {
+                var source = view.querySelector('#' + target.getAttribute('data-mirror'));
+                if (!source || typeof MutationObserver !== 'function') return;
+                target.textContent = '';
+                var observer = new MutationObserver(function () { target.textContent = source.textContent; });
+                observer.observe(source, { childList: true, characterData: true, subtree: true });
+                entry.observers.push(observer);
+            });
+            dlg.addEventListener('click', onViewClick);
+
+            function cleanUp() {
+                if (entry.closed) return;
+                entry.closed = true;
+                entry.observers.forEach(function (observer) { observer.disconnect(); });
+                radioMetaOpenDialogs = radioMetaOpenDialogs.filter(function (open) { return open !== entry; });
+                if (options.content && options.returnTo) options.returnTo.appendChild(options.content);
+                if (!useEmby && dlg.parentNode) dlg.parentNode.removeChild(dlg);
+                if (typeof options.onClose === 'function') options.onClose();
+            }
+            entry.close = function () {
+                if (entry.closed) return;
+                if (useEmby) { try { helper.close(dlg); } catch (ignore) { cleanUp(); } }
+                else cleanUp();
+            };
+            if (useEmby) dlg.addEventListener('close', cleanUp);
+            else closeButton.addEventListener('click', entry.close);
+            radioMetaOpenDialogs.push(entry);
+            if (useEmby) helper.open(dlg);
+            else document.body.appendChild(dlg);
+            return entry;
+        }
+
+        function closeRadioMetaDialogs(key) {
+            radioMetaOpenDialogs.slice().forEach(function (entry) {
+                if (!key || entry.key === key) entry.close();
+            });
+        }
+
+        // Opens one of the page's own forms (kept in .radioMetaDialogForms) in a dialog.
+        function openRadioMetaFormDialog(formId, title) {
+            var form = view.querySelector('#' + formId) || radioMetaById(formId);
+            if (!form) return null;
+            closeRadioMetaDialogs(formId);
+            var home = view.querySelector('.radioMetaDialogForms');
+            return openRadioMetaDialog({
+                key: formId,
+                title: title || form.getAttribute('data-dialog-title') || '',
+                content: form,
+                returnTo: home
+            });
+        }
+
+        // Emby's confirm dialog; resolves true for OK, false for Cancel.
+        function radioMetaConfirm(text, title) {
+            var confirm = radioMetaEmby.confirm;
+            if (typeof confirm === 'function') {
+                return confirm({ text: text, title: title || 'Radio Meta', confirmText: 'OK' })
+                    .then(function () { return true; }, function () { return false; });
+            }
+            return Promise.resolve(window.confirm(text));
+        }
+
+        function radioMetaAlert(text) {
+            var alert = radioMetaEmby.alert;
+            if (typeof alert === 'function') {
+                alert({ text: String(text || ''), title: 'Radio Meta' }).catch(function () { });
+                return;
+            }
+            window.alert(text);
+        }
+
+        // Emby's ApiClient.ajax decodes the reply only with dataType: 'json';
+        // otherwise it can hand back the raw fetch Response. Decode either way,
+        // so a save never mistakes an undecoded reply for empty data.
+        function radioMetaReadJson(data) {
+            if (data && typeof data.json === 'function') return data.json();
+            if (typeof data === 'string') {
+                try { return JSON.parse(data); } catch (ignore) { return data; }
+            }
+            if (data && typeof data === 'object') {
+                if (data.responseJSON !== undefined) return data.responseJSON;
+                if (typeof data.responseText === 'string') {
+                    try { return JSON.parse(data.responseText); } catch (ignore) { }
+                }
+            }
+            return data;
+        }
+
+        // An Emby text field with a floating label, as on Emby's own pages.
+        function makeRadioMetaField(labelText, type, maxLength, value) {
+            var container = document.createElement('div');
+            container.className = 'inputContainer';
+            var input;
+            try { input = document.createElement('input', { is: 'emby-input' }); }
+            catch (ignore) { input = document.createElement('input'); }
+            input.setAttribute('is', 'emby-input');
+            input.type = type || 'text';
+            if (maxLength) input.maxLength = maxLength;
+            input.setAttribute('label', labelText);
+            input.value = value || '';
+            if (!window.customElements || !window.customElements.get || !window.customElements.get('emby-input')) {
+                var label = document.createElement('label');
+                label.className = 'inputLabel';
+                label.textContent = labelText;
+                container.appendChild(label);
+                input.className = 'emby-input';
+            }
+            container.appendChild(input);
+            return { container: container, input: input };
+        }
+
         function getValue(object, pascalName, camelName) {
             if (!object) {
                 return '';
@@ -120,51 +322,22 @@
             console.error('Radio Meta history:', error);
         }
 
-        function makeTrashIcon(button) {
-            var ns = 'http://www.w3.org/2000/svg';
-            var svg = document.createElementNS(ns, 'svg');
-            svg.setAttribute('viewBox', '0 0 24 24');
-            svg.setAttribute('aria-hidden', 'true');
-            svg.setAttribute('focusable', 'false');
-            svg.setAttribute('fill', 'none');
-            svg.setAttribute('stroke', 'currentColor');
-            svg.setAttribute('stroke-width', '2');
-            svg.setAttribute('stroke-linecap', 'round');
-            svg.setAttribute('stroke-linejoin', 'round');
-
-            var paths = [
-                'M3 6h18',
-                'M8 6V4h8v2',
-                'M19 6l-1 14H6L5 6',
-                'M10 10v6',
-                'M14 10v6'
-            ];
-            paths.forEach(function (pathData) {
-                var path = document.createElementNS(ns, 'path');
-                path.setAttribute('d', pathData);
-                svg.appendChild(path);
-            });
-            button.appendChild(svg);
+        // Emby's icon buttons (Material icon font), as in Emby's own lists.
+        function makeRadioMetaIconButton(button, iconName) {
+            button.className = String(button.className || '')
+                .replace(/\bemby-button\b|\braised\b|\bbutton-delete\b|\bbutton-submit\b/g, ' ')
+                .replace(/\s+/g, ' ').trim() + ' paper-icon-button-light listItemButton';
+            button.textContent = '';
+            var icon = document.createElement('i');
+            icon.className = 'md-icon';
+            icon.setAttribute('aria-hidden', 'true');
+            icon.textContent = iconName;
+            button.appendChild(icon);
         }
 
-        function makePencilIcon(button) {
-            var ns = 'http://www.w3.org/2000/svg';
-            var svg = document.createElementNS(ns, 'svg');
-            svg.setAttribute('viewBox', '0 0 24 24');
-            svg.setAttribute('aria-hidden', 'true');
-            svg.setAttribute('focusable', 'false');
-            svg.setAttribute('fill', 'none');
-            svg.setAttribute('stroke', 'currentColor');
-            svg.setAttribute('stroke-width', '2');
-            svg.setAttribute('stroke-linecap', 'round');
-            svg.setAttribute('stroke-linejoin', 'round');
-            ['M12 20h9', 'M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z'].forEach(function (pathData) {
-                var path = document.createElementNS(ns, 'path');
-                path.setAttribute('d', pathData);
-                svg.appendChild(path);
-            });
-            button.appendChild(svg);
-        }
+        function makeTrashIcon(button) { makeRadioMetaIconButton(button, 'delete'); }
+
+        function makePencilIcon(button) { makeRadioMetaIconButton(button, 'edit'); }
 
 
         var stationScanInProgress = false;

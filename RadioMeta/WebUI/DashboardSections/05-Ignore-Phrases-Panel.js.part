@@ -7,7 +7,7 @@
         }
 
         function renderIgnoreRules() {
-            var container = view.querySelector('#radioIgnoreRules');
+            var container = radioMetaById('radioIgnoreRules');
             if (!container) {
                 return;
             }
@@ -15,7 +15,7 @@
             container.replaceChildren();
 
             if (!ignoreRules.length) {
-                addText(container, 'radio-ignore-empty', 'No ignored phrases configured.');
+                addText(container, 'fieldDescription radio-ignore-empty', 'No ignored phrases configured.');
                 return;
             }
 
@@ -23,22 +23,23 @@
                 var phrase = getRulePhrase(rule);
                 var station = getRuleStation(rule);
                 var row = document.createElement('div');
-                row.className = 'radio-ignore-rule';
+                row.className = 'listItem listItem-border radio-ignore-rule';
 
                 var text = document.createElement('div');
-                text.className = 'radio-ignore-rule-text';
-                addText(text, 'radio-ignore-rule-phrase', phrase, 'strong');
+                text.className = 'listItemBody two-line radio-ignore-rule-text';
+                addText(text, 'listItemBodyText radio-ignore-rule-phrase', phrase);
                 addText(
                     text,
-                    'radio-ignore-rule-scope',
+                    'listItemBodyText listItemBodyText-secondary secondaryText radio-ignore-rule-scope',
                     station ? 'Station: ' + station : 'Applies to all stations'
                 );
                 row.appendChild(text);
 
                 var remove = document.createElement('button');
                 remove.type = 'button';
-                remove.className = 'emby-button raised radio-ignore-remove';
-                remove.textContent = 'Remove';
+                remove.className = 'radio-ignore-remove';
+                makeTrashIcon(remove);
+                remove.title = 'Remove';
                 remove.setAttribute('data-ignore-index', String(index));
                 remove.setAttribute('aria-label', 'Remove ignore phrase ' + phrase);
                 row.appendChild(remove);
@@ -47,7 +48,7 @@
         }
 
         function loadIgnorePhrases() {
-            var status = view.querySelector('#radioIgnoreStatus');
+            var status = radioMetaById('radioIgnoreStatus');
             if (!status || ignoreRequestInProgress) {
                 return;
             }
@@ -80,8 +81,8 @@
         }
 
         function saveIgnoreRules(nextRules, successMessage, clearInputs) {
-            var status = view.querySelector('#radioIgnoreStatus');
-            var addButton = view.querySelector('#radioIgnoreAdd');
+            var status = radioMetaById('radioIgnoreStatus');
+            var addButton = radioMetaById('radioIgnoreAdd');
             if (!status || ignoreSaveInProgress) {
                 return;
             }
@@ -99,8 +100,9 @@
                 type: 'POST',
                 url: ApiClient.getUrl('RadioMeta/IgnorePhrases'),
                 data: JSON.stringify({ Rules: nextRules }),
-                contentType: 'application/json'
-            }).then(function (data) {
+                contentType: 'application/json',
+                dataType: 'json'
+            }).then(radioMetaReadJson).then(function (data) {
                 var error = getValue(data, 'Error', 'error');
                 if (error) {
                     status.textContent = error;
@@ -109,12 +111,13 @@
 
                 ignoreRules = getValue(data, 'Rules', 'rules') || nextRules;
                 renderIgnoreRules();
+                closeRadioMetaDialogs('radioIgnoreForm');
                 status.textContent = successMessage ||
                     getValue(data, 'Message', 'message') || 'Ignore phrase settings saved.';
 
                 if (clearInputs) {
-                    var phraseInput = view.querySelector('#radioIgnorePhrase');
-                    var stationInput = view.querySelector('#radioIgnoreStation');
+                    var phraseInput = radioMetaById('radioIgnorePhrase');
+                    var stationInput = radioMetaById('radioIgnoreStation');
                     if (phraseInput) {
                         phraseInput.value = '';
                     }
@@ -138,9 +141,9 @@
         }
 
         function addIgnorePhrase() {
-            var phraseInput = view.querySelector('#radioIgnorePhrase');
-            var stationInput = view.querySelector('#radioIgnoreStation');
-            var status = view.querySelector('#radioIgnoreStatus');
+            var phraseInput = radioMetaById('radioIgnorePhrase');
+            var stationInput = radioMetaById('radioIgnoreStation');
+            var status = radioMetaById('radioIgnoreStatus');
             if (!phraseInput || !stationInput || !status) {
                 return;
             }

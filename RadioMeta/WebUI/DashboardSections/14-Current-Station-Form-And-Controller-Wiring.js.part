@@ -1,9 +1,9 @@
         function addCurrentlyPlayingStationToForm() {
-            var button = view.querySelector('#radioStationAddCurrentButton');
-            var status = view.querySelector('#radioStationCreateStatus');
-            var nameInput = view.querySelector('#radioStationCreateName');
-            var urlInput = view.querySelector('#radioStationCreateUrl');
-            var artworkInput = view.querySelector('#radioStationCreateArtworkUrl');
+            var button = radioMetaById('radioStationAddCurrentButton');
+            var status = radioMetaById('radioStationCreateStatus');
+            var nameInput = radioMetaById('radioStationCreateName');
+            var urlInput = radioMetaById('radioStationCreateUrl');
+            var artworkInput = radioMetaById('radioStationCreateArtworkUrl');
             if (!button || !status || !nameInput || !urlInput || !artworkInput || button.disabled) return;
 
             button.disabled = true;
@@ -264,10 +264,10 @@
             if (!imported.recognized) return; // Ordinary station-name pastes are unchanged.
             event.preventDefault();
 
-            var status = view.querySelector('#radioStationCreateStatus');
-            var nameInput = view.querySelector('#radioStationCreateName');
-            var urlInput = view.querySelector('#radioStationCreateUrl');
-            var artworkInput = view.querySelector('#radioStationCreateArtworkUrl');
+            var status = radioMetaById('radioStationCreateStatus');
+            var nameInput = radioMetaById('radioStationCreateName');
+            var urlInput = radioMetaById('radioStationCreateUrl');
+            var artworkInput = radioMetaById('radioStationCreateArtworkUrl');
             if (!nameInput || !urlInput || !artworkInput) {
                 if (status) status.textContent = 'Stream Capture data was recognized, but the station form fields could not be found.';
                 return;
@@ -318,13 +318,30 @@
             (name ? (streamUrl ? (artworkUrl ? nameInput : artworkInput) : urlInput) : nameInput).focus();
         }
 
-        var stationCreateNamePasteInput = view.querySelector('#radioStationCreateName');
+        var stationCreateNamePasteInput = radioMetaById('radioStationCreateName');
         if (stationCreateNamePasteInput) {
             stationCreateNamePasteInput.addEventListener('paste', importRadioMetaStreamCapturePaste);
         }
 
-        var stationAddCurrentButton = view.querySelector('#radioStationAddCurrentButton');
-        if (stationAddCurrentButton) stationAddCurrentButton.addEventListener('click', addCurrentlyPlayingStationToForm);
+        var stationAddCurrentButton = radioMetaById('radioStationAddCurrentButton');
+        if (stationAddCurrentButton) stationAddCurrentButton.addEventListener('click', function () {
+            openRadioMetaFormDialog('radioStationCreateForm');
+            addCurrentlyPlayingStationToForm();
+        });
+        var stationNewButton = radioMetaById('radioStationNewButton');
+        if (stationNewButton) stationNewButton.addEventListener('click', function () {
+            openRadioMetaFormDialog('radioStationCreateForm');
+            var nameInput = radioMetaById('radioStationCreateName');
+            if (nameInput) focusRadioMetaWithoutScrolling(nameInput, false);
+        });
+        var stationModeNewButton = radioMetaById('radioStationModeNew');
+        if (stationModeNewButton) stationModeNewButton.addEventListener('click', function () { openStationModeDialog(''); });
+        var ignoreNewButton = radioMetaById('radioIgnoreNew');
+        if (ignoreNewButton) ignoreNewButton.addEventListener('click', function () {
+            openRadioMetaFormDialog('radioIgnoreForm');
+            var phrase = radioMetaById('radioIgnorePhrase');
+            if (phrase) focusRadioMetaWithoutScrolling(phrase, false);
+        });
         ['#radioStationCreateName', '#radioStationCreateUrl', '#radioStationCreateArtworkUrl'].forEach(function (selector) {
             var input = view.querySelector(selector);
             if (input) input.addEventListener('keydown', function (event) {
@@ -332,11 +349,11 @@
             });
         });
 
-        var stationModeAddButton = view.querySelector('#radioStationModeAdd');
+        var stationModeAddButton = radioMetaById('radioStationModeAdd');
         if (stationModeAddButton) {
             stationModeAddButton.addEventListener('click', addStationModeRule);
         }
-        var stationModeNameInput = view.querySelector('#radioStationModeName');
+        var stationModeNameInput = radioMetaById('radioStationModeName');
         if (stationModeNameInput) {
             stationModeNameInput.addEventListener('input', function () {
                 var name = stationModeNameInput.value.trim().toLowerCase();
@@ -344,8 +361,8 @@
                     return getModeStation(rule).toLowerCase() === name;
                 });
                 if (!existing) return;
-                var modeSelect = view.querySelector('#radioStationModeValue');
-                var delaySelect = view.querySelector('#radioStationModeDelay');
+                var modeSelect = radioMetaById('radioStationModeValue');
+                var delaySelect = radioMetaById('radioStationModeDelay');
                 if (modeSelect) modeSelect.value = getStationMode(existing);
                 if (delaySelect) delaySelect.value = String(getStationModeDelaySeconds(existing));
             });
@@ -357,12 +374,12 @@
             });
         }
 
-        var stationFolderChangeButton = view.querySelector('#radioStationFolderChange');
+        var stationFolderChangeButton = radioMetaById('radioStationFolderChange');
         if (stationFolderChangeButton) {
             stationFolderChangeButton.addEventListener('click', focusStationFolderSetting);
         }
 
-        var pathSettingsSaveButton = view.querySelector('#radioPathSettingsSave');
+        var pathSettingsSaveButton = radioMetaById('radioPathSettingsSave');
         if (pathSettingsSaveButton) {
             pathSettingsSaveButton.addEventListener('click', savePathSettings);
         }
@@ -378,23 +395,23 @@
             }
         });
 
-        var historyScanButton = view.querySelector('#radioHistoryScan');
+        var historyScanButton = radioMetaById('radioHistoryScan');
         if (historyScanButton) {
             historyScanButton.addEventListener('click', toggleHistoryVisibility);
         }
 
-        var historyClearButton = view.querySelector('#radioHistoryClear');
+        var historyClearButton = radioMetaById('radioHistoryClear');
         if (historyClearButton) {
             historyClearButton.addEventListener('click', clearHistory);
         }
 
         updateHistoryVisibilityButton();
 
-        var addButton = view.querySelector('#radioIgnoreAdd');
+        var addButton = radioMetaById('radioIgnoreAdd');
         if (addButton) {
             addButton.addEventListener('click', addIgnorePhrase);
         }
-        var phraseInput = view.querySelector('#radioIgnorePhrase');
+        var phraseInput = radioMetaById('radioIgnorePhrase');
         if (phraseInput) {
             phraseInput.addEventListener('keydown', function (event) {
                 if (event.key === 'Enter') {

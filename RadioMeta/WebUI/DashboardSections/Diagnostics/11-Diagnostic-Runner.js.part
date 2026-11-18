@@ -1,7 +1,7 @@
         function runRadioMetaDiagnostics() {
-            var runButton = view.querySelector('#radioDiagnosticsRun');
-            var statusElement = view.querySelector('#radioDiagnosticsStatus');
-            var resultsElement = view.querySelector('#radioDiagnosticsResults');
+            var runButton = radioMetaById('radioDiagnosticsRun');
+            var statusElement = radioMetaById('radioDiagnosticsStatus');
+            var resultsElement = radioMetaById('radioDiagnosticsResults');
             if (!runButton || !statusElement || runButton.disabled) return;
 
             runButton.disabled = true;
@@ -12,7 +12,7 @@
 
             var checks = [];
             var startedAt = new Date();
-            var dashboardControllerInfo = window.__radioMetaDashboardControllerInfo_v1328;
+            var dashboardControllerInfo = window.__radioMetaDashboardControllerInfo_v1352;
             diagnosticAddCheck(checks,
                 dashboardControllerInfo && dashboardControllerInfo.initialized === true ? 'PASS' : 'WARN',
                 'Dashboard controller bundle',
@@ -120,7 +120,7 @@
 
                 var localPlayerItemId = '';
                 try {
-                    var bridgeForSessionMatch = window.__radioMetaPlayerIntegration1328;
+                    var bridgeForSessionMatch = window.__radioMetaPlayerIntegration1352;
                     var bridgePlayer = bridgeForSessionMatch && bridgeForSessionMatch.modules &&
                         bridgeForSessionMatch.modules.currentPlayer && bridgeForSessionMatch.modules.currentPlayer.get();
                     var bridgeItem = bridgePlayer && bridgeForSessionMatch.modules.playbackManager &&
@@ -194,6 +194,17 @@
                     } else {
                         diagnosticAddCheck(checks, 'INFO', 'Adaptive metadata routing',
                             'This plugin build did not report the adaptive-routing toggle. The setting may be unavailable in this build or its response.');
+                    }
+
+                    if (pathData && diagnosticValue(pathData, 'EnableStationsOutsideFolder', 'enableStationsOutsideFolder') !== undefined) {
+                        var outsideFolderOn = diagnosticValue(pathData, 'EnableStationsOutsideFolder', 'enableStationsOutsideFolder') !== false;
+                        var outsideAutomatic = !!diagnosticValue(pathData, 'AutomaticStationDetection', 'automaticStationDetection');
+                        diagnosticAddCheck(checks, 'INFO', 'Stations outside the station folder',
+                            outsideAutomatic
+                                ? 'The Station folder is blank, so automatic detection already gives metadata to every audio .strm and web-address station; this option has no effect.'
+                                : outsideFolderOn
+                                    ? 'On. Any audio .strm playing from another folder, and any audio station played straight from a web address (for example WebStreams), also receives metadata. Nothing is listed, scanned or written.'
+                                    : 'Off. Only stations in the Station folder receive metadata.');
                     }
 
                     var readerLimit = Number(diagnosticValue(health, 'DirectIcyMaxIntervals', 'directIcyMaxIntervals') || 0);
@@ -321,21 +332,48 @@
                     var bridgeLookupWindow = window;
                     for (var bridgeLookupDepth = 0; bridgeLookupDepth < 5; bridgeLookupDepth++) {
                         try {
-                            browserPlayerBridge = bridgeLookupWindow.__radioMetaPlayerIntegration1328 || null;
+                            browserPlayerBridge = bridgeLookupWindow.__radioMetaPlayerIntegration1352 || null;
                             if (browserPlayerBridge || !bridgeLookupWindow.parent || bridgeLookupWindow.parent === bridgeLookupWindow) break;
                             bridgeLookupWindow = bridgeLookupWindow.parent;
                         } catch (_) {
                             break;
                         }
                     }
+                    // An older cached player script uses an older version key.
+                    var stalePlayerScriptVersion = '';
+                    if (!browserPlayerBridge) {
+                        try {
+                            Object.keys(window).forEach(function (key) {
+                                if (/^__radioMetaPlayerIntegration\d+$/.test(key) && window[key] && window[key].scriptVersion) {
+                                    stalePlayerScriptVersion = String(window[key].scriptVersion);
+                                } else if (/^__radioMetaPlayerIntegration\d+$/.test(key) && !stalePlayerScriptVersion) {
+                                    stalePlayerScriptVersion = 'an older version';
+                                }
+                            });
+                        } catch (_) { stalePlayerScriptVersion = ''; }
+                    } else if (browserPlayerBridge.scriptOutOfDate) {
+                        stalePlayerScriptVersion = String(browserPlayerBridge.scriptVersion || '');
+                    }
+                    if (stalePlayerScriptVersion) {
+                        diagnosticAddCheck(checks, 'WARN', 'Player script out of date',
+                            'This browser is running a cached Radio Meta player script (' + stalePlayerScriptVersion +
+                            ') that is older than the plugin on the server. Press Ctrl+F5 (on a phone, close and reopen the tab) to load the new version.');
+                    }
                     var browserBridgeStarted = !!(browserPlayerBridge && browserPlayerBridge.started === true);
                     var browserModulesConnected = !!(browserPlayerBridge && browserPlayerBridge.modules &&
                         browserPlayerBridge.modules.currentPlayer && browserPlayerBridge.modules.playbackManager && browserPlayerBridge.modules.events);
-                    var browserBridgeStatus = browserBridgeStarted && browserModulesConnected ? 'PASS' :
-                        (localRadioSession ? 'WARN' : 'INFO');
+                    // The players only get the song through Radio Meta's hook on Emby's
+                    // display event; without it they show the station title.
+                    var browserDisplayHookInPlace = !!(browserModulesConnected && browserPlayerBridge.eventTriggerWrapper &&
+                        browserPlayerBridge.modules.events.trigger !== browserPlayerBridge.eventTriggerOriginal);
+                    var browserBridgeStatus = browserBridgeStarted && browserModulesConnected
+                        ? (browserDisplayHookInPlace ? 'PASS' : 'FAIL')
+                        : (localRadioSession ? 'WARN' : 'INFO');
                     diagnosticAddCheck(checks, browserBridgeStatus, 'Native player browser bridge',
-                        browserBridgeStarted && browserModulesConnected
-                            ? 'The DLL-embedded browser bridge is running and connected to Emby current-player, PlaybackManager, and event modules.'
+                        browserBridgeStarted && browserModulesConnected && browserDisplayHookInPlace
+                            ? 'The DLL-embedded browser bridge is running and connected to Emby current-player, PlaybackManager, and event modules, and its hook on the player display is in place.'
+                            : browserBridgeStarted && browserModulesConnected
+                                ? 'The browser bridge is running, but its hook on Emby\'s player display is missing, so the players show the station title instead of the song. Radio Meta puts it back on its next check (within 2.5 seconds); rerun diagnostics. If this stays, press Ctrl+F5.'
                             : localRadioSession
                                 ? 'This browser has an active Radio Meta session, but its embedded player bridge is not confirmed as running and connected. Restart the web app and rerun diagnostics.'
                                 : 'The bridge is not visible in this page context. This is informational when diagnostics are viewed from another device or browser context.');
@@ -739,6 +777,24 @@
                                 String(diagnosticValue(track, 'Source', 'source') || 'unknown') + ' | updated ' +
                                 String(diagnosticValue(track, 'UpdatedAt', 'updatedAt') || 'unknown'));
                         });
+                    }
+                    var settingsSaves = diagnosticValue(health, 'RecentSettingsSaves', 'recentSettingsSaves');
+                    if (Array.isArray(settingsSaves)) {
+                        headerLines.push('Recent settings saves (in-memory since start; paths omitted; also in the Emby server log):');
+                        if (!settingsSaves.length) {
+                            headerLines.push('  No settings saves since Emby started.');
+                        } else {
+                            settingsSaves.forEach(function (save) {
+                                headerLines.push('  ' +
+                                    String(diagnosticValue(save, 'TimestampUtc', 'timestampUtc') || 'time unknown') + ' | ' +
+                                    String(diagnosticValue(save, 'Device', 'device') || 'unknown device') +
+                                    ' | station folder ' + String(diagnosticValue(save, 'StationFolder', 'stationFolder') || '?') +
+                                    ' | FFprobe path ' + String(diagnosticValue(save, 'FfprobePath', 'ffprobePath') || '?') +
+                                    ' | adaptive routing ' + String(diagnosticValue(save, 'AdaptiveRouting', 'adaptiveRouting') || '?') +
+                                    ' | outside folder ' + String(diagnosticValue(save, 'StationsOutsideFolder', 'stationsOutsideFolder') || '?') +
+                                    ' | ' + String(diagnosticValue(save, 'Result', 'result') || ''));
+                            });
+                        }
                     }
                     var operationReport = diagnosticValue(health, 'RecentStationOperations', 'recentStationOperations');
                     if (Array.isArray(operationReport)) {

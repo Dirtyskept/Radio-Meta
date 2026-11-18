@@ -383,6 +383,8 @@ internal sealed class RadioMetaProxyService : IDisposable
             var ffmpegCountedActive = false;
             var stderrLineCount = 0;
             Task? stderrTask = null;
+            Task? clientWatchTask = null;
+            var clientGone = 0;
             try
             {
                 process = new Process
@@ -399,7 +401,13 @@ internal sealed class RadioMetaProxyService : IDisposable
                 };
                 var args = process.StartInfo.ArgumentList;
                 args.Add("-hide_banner"); args.Add("-loglevel"); args.Add("warning"); args.Add("-nostdin");
+                // No progress lines on stderr (1.3.152): they were only read and discarded.
+                args.Add("-nostats");
                 args.Add("-reconnect"); args.Add("1"); args.Add("-reconnect_streamed"); args.Add("1"); args.Add("-reconnect_delay_max"); args.Add("5");
+                // Restrict FFmpeg to network protocols so an upstream redirect or playlist cannot
+                // make it open local files or other protocol handlers. "crypto" covers AES-128 HLS;
+                // "httpproxy" covers servers configured with an HTTP proxy environment variable.
+                args.Add("-protocol_whitelist"); args.Add(RadioMetadataReader.NetworkProtocolWhitelist);
                 args.Add("-i"); args.Add(upstream); args.Add("-vn"); args.Add("-c:a"); args.Add("copy"); args.Add("-f"); args.Add("mp3"); args.Add("pipe:1");
                 ffmpegStartAttempted = true;
                 Interlocked.Increment(ref _ffmpegStartAttempts);
@@ -412,6 +420,32 @@ internal sealed class RadioMetaProxyService : IDisposable
                     // Drain stderr to avoid pipe backpressure, but never write raw lines to logs:
                     // FFmpeg diagnostics can contain credential-bearing upstream URLs.
                     try { while (await process.StandardError.ReadLineAsync(linked.Token).ConfigureAwait(false) is not null) Interlocked.Increment(ref stderrLineCount); } catch { }
+                });
+                // Watch the player's connection while FFmpeg runs (1.3.152). A player sends
+                // nothing after its request, so a read that ends means it disconnected. Without
+                // this, a disconnect during an upstream stall was only noticed at the next write,
+                // leaving FFmpeg running and holding a proxy slot until the upstream recovered.
+                Process watchedProcess = process;
+                clientWatchTask = Task.Run(async () =>
+                {
+                    var probe = new byte[1];
+                    try
+                    {
+                        while (!linked.IsCancellationRequested)
+                        {
+                            var received = await stream.ReadAsync(probe.AsMemory(0, 1), linked.Token).ConfigureAwait(false);
+                            if (received == 0) break; // the player closed the connection
+                        }
+                    }
+                    catch
+                    {
+                        // A reset connection ends the watch the same way as a closed one.
+                    }
+                    if (linked.IsCancellationRequested) return; // the request is already ending
+                    Interlocked.Exchange(ref clientGone, 1);
+                    try { linked.Cancel(); } catch { }
+                    // Stopping FFmpeg closes its output, so a read waiting on a stalled upstream ends now.
+                    try { if (!watchedProcess.HasExited) watchedProcess.Kill(true); } catch { }
                 });
                 var buffer = new byte[32768];
                 var output = process.StandardOutput.BaseStream;
@@ -440,13 +474,18 @@ internal sealed class RadioMetaProxyService : IDisposable
                     // Chunked transfer permits indefinite live audio without a known Content-Length.
                     await WriteChunkAsync(stream, buffer, read, linked.Token).ConfigureAwait(false);
                 }
-                if (process.HasExited && process.ExitCode != 0)
+                // Not when Radio Meta stopped FFmpeg itself because the player left.
+                if (process.HasExited && process.ExitCode != 0 && Volatile.Read(ref clientGone) == 0)
                     _logger.Warn("Radio Meta proxy FFmpeg exited with code {0}; {1} diagnostic line(s) were suppressed to avoid logging upstream URLs or tokens.", process.ExitCode, Volatile.Read(ref stderrLineCount));
                 try { if (stderrTask is not null) await stderrTask.ConfigureAwait(false); } catch { }
                 if (!linked.IsCancellationRequested) await stream.WriteAsync(Encoding.ASCII.GetBytes("0\r\n\r\n"), CancellationToken.None).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { _logger.Debug("Radio Meta proxy client disconnected; stopping its FFmpeg process."); }
             catch (IOException) { _logger.Debug("Radio Meta proxy client connection ended; stopping its FFmpeg process."); }
+            catch (Exception) when (Volatile.Read(ref clientGone) == 1)
+            {
+                _logger.Debug("Radio Meta proxy client disconnected; stopped its FFmpeg process.");
+            }
             catch (Exception ex)
             {
                 if (ffmpegStartAttempted && !responseStarted && !linked.IsCancellationRequested)
@@ -461,6 +500,9 @@ internal sealed class RadioMetaProxyService : IDisposable
             {
                 try { if (process != null && !process.HasExited) process.Kill(true); } catch { }
                 try { if (stderrTask is not null) await stderrTask.ConfigureAwait(false); } catch { }
+                // End the connection watch before the connection and FFmpeg are disposed.
+                try { if (!linked.IsCancellationRequested) linked.Cancel(); } catch { }
+                try { if (clientWatchTask is not null) await clientWatchTask.ConfigureAwait(false); } catch { }
                 try { process?.Dispose(); } catch { }
                 if (ffmpegCountedActive) Interlocked.Decrement(ref _activeFfmpegProcesses);
                 if (ffmpegSlotHeld) _ffmpegSlots.Release();

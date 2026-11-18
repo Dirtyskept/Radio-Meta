@@ -48,6 +48,10 @@ public sealed class RadioMetadataRulesService : IService
         try
         {
             plugin.UpdateConfiguration(configuration);
+            RadioMetaRuleChangeLog.Log(plugin.EmbyLogger, "title cleanup rule", previousRules, normalizedRules, rule =>
+                RadioMetaRuleChangeLog.StationOrAll(rule.StationName) + ": " + rule.RuleType +
+                (string.IsNullOrWhiteSpace(rule.Suffix) ? string.Empty : " " + RadioMetaRuleChangeLog.Quote(rule.Suffix)) +
+                (string.IsNullOrWhiteSpace(rule.PreserveLabels) ? string.Empty : ", keep " + RadioMetaRuleChangeLog.Quote(rule.PreserveLabels)));
             plugin.MetadataReader.ClearCaches();
             plugin.CurrentTrackService.RevalidateCurrentTracks();
         }
@@ -136,6 +140,10 @@ public sealed class RadioMetadataRulesService : IService
         try
         {
             plugin.UpdateConfiguration(configuration);
+            RadioMetaRuleChangeLog.Log(plugin.EmbyLogger, "title correction", previous, next, rule =>
+                RadioMetaRuleChangeLog.StationOrAll(rule.StationName) + ": " + RadioMetaRuleChangeLog.Quote(rule.OriginalTitle) +
+                " -> " + RadioMetaRuleChangeLog.Quote(rule.CorrectedTitle) +
+                (string.IsNullOrWhiteSpace(rule.CorrectedArtist) ? string.Empty : ", artist " + RadioMetaRuleChangeLog.Quote(rule.CorrectedArtist)));
             plugin.CurrentTrackService.RevalidateCurrentTracks();
         }
         catch (Exception ex)
@@ -269,6 +277,9 @@ public sealed class RadioMetadataRulesService : IService
         try
         {
             plugin.UpdateConfiguration(configuration);
+            RadioMetaRuleChangeLog.Log(plugin.EmbyLogger, "station/device setting", previousRules, normalizedRules, rule =>
+                RadioMetaRuleChangeLog.Quote(rule.StationName) + ": " + rule.Mode + ", delay " + rule.MetadataDelaySeconds + " s" +
+                (string.IsNullOrWhiteSpace(rule.MetadataDelayDeviceName) ? string.Empty : ", device " + RadioMetaRuleChangeLog.Quote(rule.MetadataDelayDeviceName)));
             plugin.MetadataReader.ClearCaches();
             plugin.CurrentTrackService.ResetPendingMetadataDelays();
             plugin.CurrentTrackService.RevalidateCurrentTracks();
@@ -413,6 +424,8 @@ public sealed class RadioMetadataRulesService : IService
         try
         {
             plugin.UpdateConfiguration(configuration);
+            RadioMetaRuleChangeLog.Log(plugin.EmbyLogger, "ignore phrase", previousRules, normalizedRules, rule =>
+                RadioMetaRuleChangeLog.Quote(rule.Phrase) + " (" + RadioMetaRuleChangeLog.StationOrAll(rule.StationName) + ")");
             plugin.MetadataReader.ClearCaches();
             plugin.CurrentTrackService.RevalidateCurrentTracks();
         }

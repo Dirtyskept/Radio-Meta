@@ -63,7 +63,8 @@ public sealed partial class RadioMetadataReader
         Func<string, string, bool>? ignoreMetadataPhrase = null,
         bool enableAdaptiveRouting = true)
     {
-        if (string.IsNullOrWhiteSpace(stationFilePath) || !File.Exists(stationFilePath))
+        if (string.IsNullOrWhiteSpace(stationFilePath) ||
+            (!File.Exists(stationFilePath) && !RadioWebStreamStations.IsVirtualStation(stationFilePath)))
         {
             return Failure("Station file was not found.");
         }
@@ -495,7 +496,7 @@ public sealed partial class RadioMetadataReader
         if (tryStats)
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, baseUrl + "/stats?sid=1&json=1");
-            request.Headers.UserAgent.ParseAdd("RadioMeta/1.0");
+            request.Headers.UserAgent.ParseAdd(RadioMetaBuildInfo.UserAgent());
 
             try
             {
@@ -587,7 +588,7 @@ public sealed partial class RadioMetadataReader
         try
         {
             using var legacyRequest = new HttpRequestMessage(HttpMethod.Get, baseUrl + "/7.html");
-            legacyRequest.Headers.UserAgent.ParseAdd("RadioMeta/1.0");
+            legacyRequest.Headers.UserAgent.ParseAdd(RadioMetaBuildInfo.UserAgent());
             using var legacyResponse = await RadioMetadataHttpTransport.SendAsync(legacyRequest,
                 HttpCompletionOption.ResponseHeadersRead, cancellationToken, validateRedirects).ConfigureAwait(false);
             if (!legacyResponse.IsSuccessStatusCode)
@@ -660,7 +661,7 @@ public sealed partial class RadioMetadataReader
         bool validateRedirects = false)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, streamUrl);
-        request.Headers.UserAgent.ParseAdd("RadioMeta/1.0");
+        request.Headers.UserAgent.ParseAdd(RadioMetaBuildInfo.UserAgent());
         request.Headers.TryAddWithoutValidation("Icy-MetaData", "1");
         using var response = await RadioMetadataHttpTransport.SendAsync(request,
             HttpCompletionOption.ResponseHeadersRead, cancellationToken, validateRedirects).ConfigureAwait(false);
@@ -673,6 +674,7 @@ public sealed partial class RadioMetadataReader
         var metaint = GetHeaderInt(response, "icy-metaint");
         if (metaint <= 0)
         {
+            RadioWebStreamStations.MarkNoIcy(streamUrl);
             diagnostics?.Record(stationName, "ICY", "error", string.Empty, string.Empty, "Server did not advertise a positive icy-metaint header.");
             return string.Empty;
         }

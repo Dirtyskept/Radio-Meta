@@ -121,7 +121,7 @@
         }
 
         function setCurrentStreamTestResult(state, message, detail) {
-            var result = view.querySelector('#radioStationStreamTestResult');
+            var result = radioMetaById('radioStationStreamTestResult');
             if (!result) return;
             result.setAttribute('data-state', state || 'idle');
             result.textContent = message || '';

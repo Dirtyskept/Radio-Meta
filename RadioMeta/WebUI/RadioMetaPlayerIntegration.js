@@ -1,7 +1,7 @@
 /* AMD resource loaded through Emby's plugin-resource URL helper and module loader. */
 define([], function () {
 /*
- * Radio Meta 1.3.128 DLL-embedded Emby player integration.
+ * Radio Meta 1.3.152 DLL-embedded Emby player integration.
  *
  * This integration does not patch Emby's nowplayingbar.js or any other player
  * module. The plugin DLL adds one reversible inline bootstrap to the Emby
@@ -28,7 +28,8 @@ define([], function () {
 (function () {
     "use strict";
 
-    var GLOBAL_KEY = "__radioMetaPlayerIntegration1328";
+    var GLOBAL_KEY = "__radioMetaPlayerIntegration1352";
+    var SCRIPT_VERSION = "1.3.152";
     if (window[GLOBAL_KEY]) return;
 
     var state = {
@@ -56,7 +57,18 @@ define([], function () {
         displayItemSnapshots: new WeakMap(),
         eventTriggerOriginal: null,
         eventTriggerWrapper: null,
+        getPlaylistOriginal: null,
+        playQueueCopies: new WeakMap(),
+        lastDisplayUpdates: new Map(),
+        scriptVersion: SCRIPT_VERSION,
+        serverVersion: "",
+        scriptOutOfDate: false,
+        holdBigPlayerLines: false,
+        lineHoldObservers: [],
+        getPlaylistWrapper: null,
         activeTrack: null,
+        artistLookups: new Map(),
+        artistLookupsInFlight: new Set(),
         lastError: ""
     };
 
@@ -70,8 +82,8 @@ define([], function () {
 
     function log(message, detail) {
         try {
-            if (detail === undefined) console.info("Radio Meta 1.3.128: " + message);
-            else console.info("Radio Meta 1.3.128: " + message, detail);
+            if (detail === undefined) console.info("Radio Meta 1.3.152: " + message);
+            else console.info("Radio Meta 1.3.152: " + message, detail);
         } catch (_) { }
     }
 
@@ -79,7 +91,7 @@ define([], function () {
         var text = String(error && error.message ? error.message : error || "Unknown error");
         if (text === state.lastError) return;
         state.lastError = text;
-        console.warn("Radio Meta 1.3.128: " + message + " (" + text.slice(0, 180) + ")");
+        console.warn("Radio Meta 1.3.152: " + message + " (" + text.slice(0, 180) + ")");
     }
 
     function moduleDefault(moduleValue) {
@@ -115,6 +127,7 @@ define([], function () {
             }
             state.modules = loaded;
             installDisplayItemEventOverlay(loaded.events);
+            installPlayQueueOverlay(loaded.playbackManager);
             log("connected to Emby's native playback modules and display-item event path");
             return loaded;
         });
@@ -190,6 +203,120 @@ define([], function () {
         state.playerDisplayElements.clear();
         state.playerDisplayOriginals = new WeakMap();
         state.lastPresentationKey = "";
+    }
+
+    // ---- Big player: station switch ---------------------------------------
+    // On a switch to a different station, the lines under the new .strm title
+    // that still show the previous station's song, artist or station are given
+    // an invisible placeholder (a non-breaking space keeps their height, so the
+    // layout does not jump). The new song fills them the moment it is applied.
+    // Only the visible big-player lines change: the display-item data used by
+    // the mini-player, the lock screen and CarPlay is not touched here.
+    var INVISIBLE_PLACEHOLDER = "\u00a0";
+    var BIG_PLAYER_LINE_SELECTORS = [".videoOsdParentTitle", ".videoOsdTitle", ".videoOsdThirdTitle"];
+
+    function clearBigPlayerAfterStationSwitch(previousTrack) {
+        // Forget the saved copies taken while the previous station played, so
+        // they are never pasted back over the new station, and stop the
+        // observer that re-applies the previous station's name.
+        disconnectFullPlayerObservers();
+        state.playerDisplayElements.forEach(function (element) {
+            if (element) element.removeAttribute("data-radiometa-player-title");
+        });
+        state.playerDisplayElements.clear();
+        state.playerDisplayOriginals = new WeakMap();
+        state.lastPresentationKey = "";
+
+        if (!previousTrack || !document.querySelectorAll) return;
+        var previousTexts = [previousTrack.song, previousTrack.artist, previousTrack.station]
+            .map(normalizeText)
+            .filter(Boolean);
+        if (!previousTexts.length) return;
+
+        Array.prototype.slice.call(document.querySelectorAll(".videoOsdText")).forEach(function (container) {
+            if (!container || !container.querySelector) return;
+            BIG_PLAYER_LINE_SELECTORS.forEach(function (selector) {
+                var line = container.querySelector(selector);
+                // Only lines still showing the previous station's text are
+                // cleared, so the new .strm title can never be blanked.
+                if (line && previousTexts.indexOf(normalizeText(line.textContent)) >= 0) {
+                    line.textContent = INVISIBLE_PLACEHOLDER;
+                }
+            });
+        });
+    }
+
+    // ---- Big player: hold the three-line layout -------------------------
+    // Emby hides the artist line (.videoOsdTitle) and the album line
+    // (.videoOsdThirdTitle) when they are empty. A station has neither until
+    // its first song arrives, so the big player went from one line to three
+    // and everything below it, the transport buttons too, moved down. While a
+    // live audio station is shown, those two lines are kept with an invisible
+    // placeholder, so the layout always has three lines and nothing moves.
+    // Only the visible big-player lines change; the data read by the
+    // mini-player, lock screen and CarPlay is not touched. Ordinary songs and
+    // audiobooks have a running time, so they are never held.
+    var HELD_LINE_SELECTORS = [".videoOsdTitle", ".videoOsdThirdTitle"];
+
+    function isLiveAudioStation(item) {
+        return !!item && item.MediaType === "Audio" && !(Number(item.RunTimeTicks) > 0);
+    }
+
+    function applyBigPlayerLineHold() {
+        if (!state.holdBigPlayerLines || !document.querySelectorAll) return;
+        Array.prototype.slice.call(document.querySelectorAll(".videoOsdText")).forEach(function (container) {
+            if (!container || !container.querySelector) return;
+            ensureLineHoldObserver(container);
+            HELD_LINE_SELECTORS.forEach(function (selector) {
+                var line = container.querySelector(selector);
+                if (!line || !line.classList) return;
+                // A hidden line may still hold an older album or station name,
+                // so it is always blanked before it is shown. A line that is
+                // already visible with the placeholder is left alone, which
+                // also stops the observer from looping.
+                if (line.classList.contains("hide") || line.textContent === "") {
+                    line.textContent = INVISIBLE_PLACEHOLDER;
+                    line.classList.remove("hide");
+                }
+            });
+        });
+    }
+
+    function ensureLineHoldObserver(container) {
+        if (typeof MutationObserver !== "function") return;
+        if (state.lineHoldObservers.some(function (entry) { return entry.container === container; })) return;
+        // Emby draws the big player shortly after the display update (after
+        // an asynchronous user lookup), so watch for it hiding a line and put
+        // the line back before the browser paints.
+        var observer = new MutationObserver(function () {
+            if (state.holdBigPlayerLines) applyBigPlayerLineHold();
+        });
+        observer.observe(container, {
+            childList: true,
+            characterData: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ["class"]
+        });
+        state.lineHoldObservers.push({ container: container, observer: observer });
+    }
+
+    function releaseBigPlayerLineHold() {
+        state.holdBigPlayerLines = false;
+        state.lineHoldObservers.forEach(function (entry) {
+            try { entry.observer.disconnect(); } catch (_) { }
+        });
+        state.lineHoldObservers = [];
+    }
+
+    function updateBigPlayerLineHold(item) {
+        if (isLiveAudioStation(item)) {
+            state.holdBigPlayerLines = true;
+            applyBigPlayerLineHold();
+        } else if (state.holdBigPlayerLines) {
+            // Emby redraws the lines itself for the new item.
+            releaseBigPlayerLineHold();
+        }
     }
 
     function syncLargePlayerStationSlot(container, track, marker) {
@@ -331,13 +458,150 @@ define([], function () {
         });
     }
 
+    // ---- Library artist lookup -------------------------------------------
+    // Emby renders each ArtistItems entry as a link to that item's page. An entry
+    // without an Id produced a link to "undefined" ("Unrecognized Guid format").
+    // Resolve the artist name to a real library artist so the link opens the
+    // artist page. Results are cached per name: hits for 30 minutes, misses for
+    // 10 minutes, so a newly added artist is picked up without polling Emby.
+    var ARTIST_HIT_TTL_MS = 30 * 60 * 1000;
+    var ARTIST_MISS_TTL_MS = 10 * 60 * 1000;
+    var ARTIST_LOOKUP_TIMEOUT_MS = 2500;
+    var ARTIST_CACHE_LIMIT = 200;
+
+    function artistMatchKey(value) {
+        var text = normalizeText(value).toLowerCase();
+        try { text = text.normalize("NFD").replace(/[\u0300-\u036f]/g, ""); } catch (_) { }
+        return text.replace(/\s+/g, " ").trim();
+    }
+
+    // Names to try, most specific first: the full credit, then the primary
+    // artist before "feat."/"ft."/"featuring"/"with". "&", "and" and "," are not
+    // split because many real artist names contain them.
+    function artistNameCandidates(artist) {
+        var full = normalizeText(artist);
+        var names = full ? [full] : [];
+        var primary = full.split(/\s+(?:feat\.?|ft\.?|featuring|with)\s+|\s*[(\[](?:feat\.?|ft\.?|featuring)\s+/i)[0];
+        primary = normalizeText(primary);
+        if (primary && artistMatchKey(primary) !== artistMatchKey(full)) names.push(primary);
+        return names;
+    }
+
+    function withTimeout(promise, ms) {
+        return new Promise(function (resolve) {
+            var done = false;
+            var timer = window.setTimeout(function () { if (!done) { done = true; resolve(null); } }, ms);
+            Promise.resolve(promise).then(function (value) {
+                if (done) return;
+                done = true; window.clearTimeout(timer); resolve(value);
+            }, function () {
+                if (done) return;
+                done = true; window.clearTimeout(timer); resolve(null);
+            });
+        });
+    }
+
+    function findArtistInLibrary(api, name) {
+        var params = {
+            SearchTerm: name,
+            Limit: 20,
+            Recursive: true,
+            EnableImages: false,
+            EnableUserData: false
+        };
+        try {
+            var userId = typeof api.getCurrentUserId === "function" ? api.getCurrentUserId() : "";
+            if (userId) params.UserId = userId;
+        } catch (_) { }
+
+        var wanted = artistMatchKey(name);
+        return api.getJSON(api.getUrl("Artists", params)).then(function (result) {
+            var items = result && Array.isArray(result.Items) ? result.Items : [];
+            for (var i = 0; i < items.length; i++) {
+                var candidate = items[i];
+                if (candidate && candidate.Id && artistMatchKey(candidate.Name) === wanted) {
+                    return { id: String(candidate.Id), name: String(candidate.Name || name) };
+                }
+            }
+            return null;
+        });
+    }
+
+    // Resolves to { id, name } for a library artist, or null. Never rejects.
+    function resolveLibraryArtist(api, artist) {
+        var key = artistMatchKey(artist);
+        if (!key || !api || typeof api.getJSON !== "function" || typeof api.getUrl !== "function") {
+            return Promise.resolve(null);
+        }
+
+        var now = Date.now();
+        var cached = state.artistLookups.get(key);
+        if (cached && now < cached.expiresAt) return Promise.resolve(cached.artist);
+
+        var names = artistNameCandidates(artist);
+        var lookup = names.reduce(function (previous, name) {
+            return previous.then(function (found) {
+                return found || findArtistInLibrary(api, name);
+            });
+        }, Promise.resolve(null));
+
+        return withTimeout(lookup, ARTIST_LOOKUP_TIMEOUT_MS).then(function (found) {
+            if (state.artistLookups.size >= ARTIST_CACHE_LIMIT) state.artistLookups.clear();
+            state.artistLookups.set(key, {
+                artist: found,
+                expiresAt: Date.now() + (found ? ARTIST_HIT_TTL_MS : ARTIST_MISS_TTL_MS)
+            });
+            return found;
+        }, function () { return null; });
+    }
+
+    // Returns the cached library artist ({ id, name }), null for a cached miss,
+    // or undefined when the name has not been looked up (or the entry expired).
+    function peekLibraryArtist(artist) {
+        var cached = state.artistLookups.get(artistMatchKey(artist));
+        if (!cached || Date.now() >= cached.expiresAt) return undefined;
+        return cached.artist;
+    }
+
+    // Starts a lookup in the background and never blocks the poll. The display
+    // must not wait for it: during a station switch, a blocking lookup let the
+    // previous station's song be written onto the newly selected station. The
+    // result lands in the cache, and the next poll (within 2.5 s) adds the link.
+    function startLibraryArtistLookup(api, artist) {
+        var key = artistMatchKey(artist);
+        if (!key || state.artistLookupsInFlight.has(key)) return;
+        state.artistLookupsInFlight.add(key);
+        resolveLibraryArtist(api, artist).then(function () {
+            state.artistLookupsInFlight.delete(key);
+        }, function () {
+            state.artistLookupsInFlight.delete(key);
+        });
+    }
+
+    // The ArtistItems entry Emby renders on the artist line. A library artist
+    // links to its own page. An artist that is not in the library keeps the same
+    // text, but its link targets the playing station item, so a click opens the
+    // station instead of failing with "Unrecognized Guid format".
+    function buildArtistItem(item, track) {
+        if (track.artistId) {
+            return { Name: track.artist, Id: track.artistId, Type: "MusicArtist" };
+        }
+        var fallback = { Name: track.artist };
+        if (item && item.Id) {
+            fallback.Id = item.Id;
+            if (item.Type) fallback.Type = item.Type;
+            if (item.ServerId) fallback.ServerId = item.ServerId;
+        }
+        return fallback;
+    }
+
     function applyDisplayMetadata(item, track) {
         if (!item || !track) return;
         // These are the only two fields consumed by Emby's native mini-player
         // text renderer: Name and ArtistItems. Do not synthesize album/artist
         // alternatives or rewrite other metadata fields.
         item.Name = track.song;
-        item.ArtistItems = [{ Name: track.artist }];
+        item.ArtistItems = [buildArtistItem(item, track)];
 
         // Preserve the .strm item's native station artwork metadata. Emby's
         // mini-player reads PrimaryImageTag or ImageTags.Primary and builds its
@@ -397,10 +661,43 @@ define([], function () {
                 warn("could not decorate Emby's native display item", error);
             }
 
+            // A display update for a different item than the station being
+            // labelled is a station switch; remember the previous track so its
+            // leftovers can be cleared after Emby renders the new item.
+            var switchedFromTrack = null;
+            try {
+                if (eventName === "displayitemupdated" && Array.isArray(args) &&
+                    state.activeTrack && state.activeItemId && args[0] &&
+                    String(args[0].Id || "") && String(args[0].Id || "") !== state.activeItemId) {
+                    switchedFromTrack = state.activeTrack;
+                }
+            } catch (_) { switchedFromTrack = null; }
+
             var result = originalTrigger.apply(this, arguments);
+
+            // Remember each player renderer's latest display update, whatever item
+            // it is for, so a new song can be drawn by repeating it (see
+            // redrawPlayersQuietly). Matched to the playing item by its Id.
+            if (eventName === "displayitemupdated" && Array.isArray(args) && args[0] &&
+                target && typeof target === "object") {
+                state.lastDisplayUpdates.set(target, args);
+            }
+
+            if (eventName === "displayitemupdated" && Array.isArray(args)) {
+                try { updateBigPlayerLineHold(args[1] || args[0]); }
+                catch (error) { warn("could not hold the big player's line layout", error); }
+            }
+
+            if (switchedFromTrack) {
+                try { clearBigPlayerAfterStationSwitch(switchedFromTrack); }
+                catch (error) { warn("could not clear the big player after a station switch", error); }
+            }
             // Emby's subscribers render synchronously from displayitemupdated.
             // Keep the only DOM text update confined to the full-player station row.
-            if (eventName === "displayitemupdated" && state.activeTrack) {
+            // Not after a station switch: the active track is still the previous
+            // station's until the new song is applied, so re-applying it here
+            // would write the old station name under the new .strm title.
+            if (eventName === "displayitemupdated" && state.activeTrack && !switchedFromTrack) {
                 scheduleFullPlayerStationPresentation();
             }
             return result;
@@ -411,13 +708,179 @@ define([], function () {
         state.eventTriggerWrapper = wrappedTrigger;
     }
 
-    function restoreEventBusOverlay() {
-        var events = state.modules && state.modules.events;
-        if (events && state.eventTriggerWrapper && events.trigger === state.eventTriggerWrapper) {
-            events.trigger = state.eventTriggerOriginal;
+    // The play queue list in the big player (and "save play queue", "play next"
+    // and the queue reported to the server) reads its entries through
+    // PlaybackManager.getPlaylist(), which returns the same item objects Radio
+    // Meta renames. Hand the list a copy of the playing station with its
+    // original station name, so the list never changes when the song does and
+    // Emby has nothing to redraw. The real item stays renamed, so the player,
+    // mini-player, lock screen and CarPlay are unchanged. Entries are matched by
+    // PlaylistItemId, so clicking, removing and dragging work as before.
+    // Emby's list keeps the item objects it was given and later redraws single
+    // rows from them without asking again (when a row scrolls into view, or when
+    // the server reports playback data). So the list must never be given an
+    // object Radio Meta will rename. Each such item gets one copy, kept for the
+    // rest of the page, so the list sees the same object on every refresh (with
+    // music Emby always gets the same objects and redraws without a blink).
+    // Copies are made for:
+    //  - Radio Meta's active station, from its saved station data;
+    //  - the audio item that is playing now, even before Radio Meta has applied
+    //    its first song. After a station change Emby refreshes the list before
+    //    the song arrives; handing it Emby's own object then let the later
+    //    rename leak into a single-row redraw (station name -> song -> station
+    //    name, with a flicker).
+    function stationCopyForPlayQueue(item) {
+        var cached = state.playQueueCopies.get(item);
+        if (cached) return cached;
+        var copy = Object.assign({}, item);
+        if (item === state.activeItem && state.activeSnapshot) restoreItemSnapshot(copy, state.activeSnapshot);
+        state.playQueueCopies.set(item, copy);
+        return copy;
+    }
+
+    function currentlyPlayingAudioItem() {
+        try {
+            var modules = state.modules;
+            var player = modules && modules.currentPlayer && modules.currentPlayer.get();
+            var item = player && player.isLocalPlayer ? modules.playbackManager.currentItem(player) : null;
+            return item && item.MediaType === "Audio" ? item : null;
+        } catch (_) {
+            return null;
         }
-        state.eventTriggerOriginal = null;
-        state.eventTriggerWrapper = null;
+    }
+
+    function withStationNamesInPlayQueue(result) {
+        try {
+            if (!result || !Array.isArray(result.Items)) return result;
+            var active = state.activeItem && state.activeSnapshot ? state.activeItem : null;
+            var playing = currentlyPlayingAudioItem();
+            var hasActive = !!active && result.Items.indexOf(active) >= 0;
+            var hasPlaying = !!playing && result.Items.indexOf(playing) >= 0;
+            if (!hasActive && !hasPlaying) return result;
+            var copy = Object.assign({}, result);
+            copy.Items = result.Items.map(function (item) {
+                return (item === active || item === playing) ? stationCopyForPlayQueue(item) : item;
+            });
+            return copy;
+        } catch (error) {
+            warn("could not keep the station name in the play queue", error);
+            return result;
+        }
+    }
+
+    // Radio Meta's two wrappers (the display event above and getPlaylist below)
+    // live only in this page. Browsers can fire pagehide and keep the page
+    // running (back/forward cache, a frozen or restored tab), and before 1.3.152
+    // Radio Meta removed both wrappers then and never put them back, so the
+    // players showed the station title for the rest of the page. On each poll,
+    // put back a wrapper that is missing (Emby's original is in place again).
+    // Returns true when one was put back.
+    function ensurePlayerHooks(modules) {
+        var restored = false;
+        var events = modules && modules.events;
+        var playbackManager = modules && modules.playbackManager;
+        if (events && typeof events.trigger === "function" &&
+            (!state.eventTriggerWrapper || events.trigger === state.eventTriggerOriginal)) {
+            state.eventTriggerWrapper = null;
+            state.eventTriggerOriginal = null;
+            installDisplayItemEventOverlay(events);
+            restored = !!state.eventTriggerWrapper;
+        }
+        if (playbackManager && typeof playbackManager.getPlaylist === "function" &&
+            (!state.getPlaylistWrapper || playbackManager.getPlaylist === state.getPlaylistOriginal)) {
+            state.getPlaylistWrapper = null;
+            state.getPlaylistOriginal = null;
+            installPlayQueueOverlay(playbackManager);
+            restored = !!state.getPlaylistWrapper || restored;
+        }
+        return restored;
+    }
+
+    function installPlayQueueOverlay(playbackManager) {
+        if (!playbackManager || typeof playbackManager.getPlaylist !== "function" || state.getPlaylistWrapper) return;
+        var originalGetPlaylist = playbackManager.getPlaylist;
+        var wrappedGetPlaylist = function () {
+            var result = originalGetPlaylist.apply(this, arguments);
+            if (result && typeof result.then === "function") {
+                return result.then(withStationNamesInPlayQueue);
+            }
+            return withStationNamesInPlayQueue(result);
+        };
+        playbackManager.getPlaylist = wrappedGetPlaylist;
+        state.getPlaylistOriginal = originalGetPlaylist;
+        state.getPlaylistWrapper = wrappedGetPlaylist;
+    }
+
+    // When the background library-artist lookup finishes for the song already
+    // showing, only the artist link changes. Sending Emby's full statechange for
+    // that made the big player refresh and scroll its whole play-queue list a
+    // second time (in videoosd.js the list refresh runs only in onStateChanged).
+    // Instead, repeat the last display update each player renderer (mini-player
+    // and big player) received for this station: they redraw their text, now
+    // with the link, and the list is left alone. The item itself is updated as
+    // usual, so the lock screen and CarPlay read the same name and artist.
+    // Returns false (the caller then uses the normal full update) if no display
+    // update for this station has been seen yet.
+    function updateArtistLinkQuietly(track, modules) {
+        var player = modules.currentPlayer.get();
+        if (!player || !player.isLocalPlayer) return false;
+        var item = modules.playbackManager.currentItem(player);
+        if (!item || item !== state.activeItem) return false;
+        if (!knownDisplayUpdatesFor(item).length) return false;
+
+        state.activeTrack = track;
+        applyDisplayMetadata(item, track);
+        updateKnownDisplayItemCopies(track);
+        return redrawPlayersQuietly(item, modules);
+    }
+
+    function knownDisplayUpdatesFor(item) {
+        var itemId = String((item && item.Id) || "");
+        var updates = [];
+        if (!itemId) return updates;
+        state.lastDisplayUpdates.forEach(function (args, target) {
+            if (Array.isArray(args) && args[0] && String(args[0].Id || "") === itemId) {
+                updates.push({ target: target, args: args });
+            }
+        });
+        return updates;
+    }
+
+    // Repeats the last display update each player renderer (mini-player and big
+    // player) received for this item. They redraw their text from the decorated
+    // copy; Emby's play-queue list is not refreshed, because in videoosd.js that
+    // happens only on statechange. Returns false when none is known yet.
+    //
+    // The repeated update carries a copy of Emby's state flagged
+    // IsInitialRequest. In the big player's displayitemupdated handler that flag
+    // only skips repainting the poster/logo, header logo, backdrop and tab title;
+    // the song, artist and station lines are still drawn. Those pictures belong
+    // to the station, which hasn't changed, so repainting them only made the logo
+    // flicker. The mini-player ignores the flag. Emby's own display updates (a
+    // station change, playback start) are never flagged by Radio Meta, so a new
+    // station's logo and backdrop appear as usual.
+    function redrawPlayersQuietly(item, modules) {
+        var updates = knownDisplayUpdatesFor(item);
+        if (!updates.length) return false;
+        updates.forEach(function (update) {
+            var args = update.args.slice(0);
+            args[2] = Object.assign({}, args[2] || {}, { IsInitialRequest: true });
+            try { modules.events.trigger(update.target, "displayitemupdated", args); }
+            catch (error) { warn("could not redraw a player quietly", error); }
+        });
+        return true;
+    }
+
+    // True while Emby's big player (videoosd) is on screen in this browser.
+    function isBigPlayerOpen() {
+        if (!document.querySelectorAll) return false;
+        return Array.prototype.slice.call(document.querySelectorAll(".videoOsdText")).some(function (element) {
+            try {
+                return !!element && typeof element.getClientRects === "function" && element.getClientRects().length > 0;
+            } catch (_) {
+                return false;
+            }
+        });
     }
 
     function publishNativePlayerState(player, playbackManager, events) {
@@ -440,7 +903,8 @@ define([], function () {
         if (item.Type && item.Type !== "Audio" && item.MediaType !== "Audio") return false;
 
         if (state.activeItem && state.activeItem !== item) {
-            restorePlayerDisplayPolish();
+            if (String(item.Id || "") !== state.activeItemId) clearBigPlayerAfterStationSwitch(state.activeTrack);
+            else restorePlayerDisplayPolish();
             restoreItemSnapshot(state.activeItem, state.activeSnapshot);
             restoreDisplayItemCopies();
             state.activeItem = null;
@@ -465,15 +929,36 @@ define([], function () {
         // The displayitemupdated event bridge above decorates that cached copy
         // immediately before Emby's native mini/full-player renderers consume it.
         updateKnownDisplayItemCopies(track);
-        publishNativePlayerState(player, modules.playbackManager, modules.events);
+
+        // While the big player is open, a full statechange makes Emby refresh and
+        // scroll its whole play-queue list, which flickers in a long list. Then
+        // the players are redrawn by repeating their display update instead. The
+        // lock screen and CarPlay read the renamed item on Emby's next time
+        // update. With the big player closed, nothing changes: the statechange
+        // is sent exactly as before.
+        var redrawnQuietly = isBigPlayerOpen() && redrawPlayersQuietly(item, modules);
+        if (!redrawnQuietly) {
+            publishNativePlayerState(player, modules.playbackManager, modules.events);
+        }
         scheduleFullPlayerStationPresentation();
-        return true;
+        return redrawnQuietly ? "quiet" : "statechange";
     }
 
     function restoreNativePlayerItem(modules) {
         if (!state.activeItem || !state.activeSnapshot) return;
-        restorePlayerDisplayPolish();
         var oldItem = state.activeItem;
+        var playingItem = null;
+        try {
+            var currentLocalPlayer = modules.currentPlayer.get();
+            playingItem = currentLocalPlayer ? modules.playbackManager.currentItem(currentLocalPlayer) : null;
+        } catch (_) { playingItem = null; }
+        // If a different station is now playing, clear rather than restore the
+        // big player, so the previous station's content is not pasted back.
+        if (playingItem && String(playingItem.Id || "") && String(playingItem.Id || "") !== state.activeItemId) {
+            clearBigPlayerAfterStationSwitch(state.activeTrack);
+        } else {
+            restorePlayerDisplayPolish();
+        }
         restoreItemSnapshot(oldItem, state.activeSnapshot);
         restoreDisplayItemCopies();
         state.activeItem = null;
@@ -517,14 +1002,26 @@ define([], function () {
         return candidates.length === 1 ? candidates[0] : null;
     }
 
+    function fallbackSessionCandidates(session) {
+        var playState = (session && session.PlayState) || {};
+        return [
+            playState.PlaySessionId,
+            session && session.PlaySessionId,
+            session && session.Id
+        ].filter(Boolean).map(String);
+    }
+
+    // True when a playing session's ProviderIds lack a track, so the server
+    // fallback is needed.
+    function needsServerFallback(sessions) {
+        return sessions.some(function (session) {
+            return !!(session && session.NowPlayingItem && !parseSessionTrack(session));
+        });
+    }
+
     function parseCurrentTrackFallback(session, currentTracks) {
         if (!session || !Array.isArray(currentTracks)) return null;
-        var playState = session.PlayState || {};
-        var candidates = [
-            playState.PlaySessionId,
-            session.PlaySessionId,
-            session.Id
-        ].filter(Boolean).map(String);
+        var candidates = fallbackSessionCandidates(session);
 
         var current = currentTracks.find(function (track) {
             return track && candidates.indexOf(String(track.SessionId || "")) >= 0 &&
@@ -777,13 +1274,22 @@ define([], function () {
             }
 
             var modules = await loadEmbyModules();
-            var responses = await Promise.all([
-                api.getSessions(),
-                api.getJSON(api.getUrl("RadioMeta/CurrentTracks")).catch(function () { return null; })
-            ]);
-            var sessions = Array.isArray(responses[0]) ? responses[0] : [];
-            var fallback = responses[1] && Array.isArray(responses[1].Items)
-                ? responses[1].Items : [];
+            if (ensurePlayerHooks(modules)) {
+                // Draw the current song again now that the players can get it.
+                state.lastTrackKey = "";
+                log("put back its hook on Emby's player display, which was missing; redrawing the players with the current song");
+            }
+            var sessionList = await api.getSessions();
+            var sessions = Array.isArray(sessionList) ? sessionList : [];
+            // Ask the server only when a playing session lacks Radio Meta ProviderIds.
+            // In normal playback that is never, so no extra request delays the poll.
+            // MyCurrentTracks returns only the signed-in user's own sessions.
+            var fallbackResponse = needsServerFallback(sessions)
+                ? await api.getJSON(api.getUrl("RadioMeta/MyCurrentTracks"))
+                    .catch(function () { return null; })
+                : null;
+            var fallback = fallbackResponse && Array.isArray(fallbackResponse.Items)
+                ? fallbackResponse.Items : [];
 
             updateDashboard(sessions, fallback);
 
@@ -801,18 +1307,39 @@ define([], function () {
             }
 
             state.lastRadioSeenAt = Date.now();
-            var key = trackKey(track);
+            // Never await here: the session snapshot must be applied immediately.
+            var libraryArtist = peekLibraryArtist(track.artist);
+            if (libraryArtist === undefined) startLibraryArtistLookup(api, track.artist);
+            track.artistId = libraryArtist ? libraryArtist.id : "";
+            var key = trackKey(track) + "\u0000" + track.artistId;
             var player = modules.currentPlayer.get();
             var item = player ? modules.playbackManager.currentItem(player) : null;
             var changedItem = item && item !== state.activeItem;
 
             if (key !== state.lastTrackKey || changedItem || !state.activeItem) {
-                if (applyTrackToNativePlayer(track, modules)) {
+                // Same song on the same station, and the only news is the library
+                // artist link: add it without a full player refresh.
+                var onlyLinkAdded = !changedItem && state.activeItem && state.activeTrack &&
+                    track.artistId && !state.activeTrack.artistId &&
+                    trackKey(track) === trackKey(state.activeTrack);
+                if (onlyLinkAdded && updateArtistLinkQuietly(track, modules)) {
                     state.lastTrackKey = key;
-                    log("sent song and artist through Emby's native player statechange", {
+                    log("added the library artist link without a full player refresh", {
                         song: track.song,
                         artist: track.artist
                     });
+                } else {
+                    var applied = applyTrackToNativePlayer(track, modules);
+                    if (applied) {
+                        state.lastTrackKey = key;
+                        log(applied === "quiet"
+                            ? "big player open: redrew the players with the new song without a full player refresh"
+                            : "sent song and artist through Emby's native player statechange", {
+                            song: track.song,
+                            artist: track.artist,
+                            artistLinked: !!track.artistId
+                        });
+                    }
                 }
             }
         } catch (error) {
@@ -831,10 +1358,48 @@ define([], function () {
         }, delay);
     }
 
+    // After a Radio Meta update, a browser can keep running its cached copy of
+    // this script until the page is hard-reloaded. Once per page load, ask the
+    // server which version it runs; if it differs, show Emby's own short toast
+    // asking for Ctrl+F5, and note it for Diagnostics. Nothing reloads by itself
+    // and Emby's files are not changed.
+    function compareVersion(a, b) {
+        var pa = String(a || "").split("."), pb = String(b || "").split(".");
+        for (var i = 0; i < 3; i++) {
+            var x = parseInt(pa[i], 10) || 0, y = parseInt(pb[i], 10) || 0;
+            if (x !== y) return x < y ? -1 : 1;
+        }
+        return 0;
+    }
+
+    function checkPlayerScriptIsCurrent() {
+        var api = window.ApiClient;
+        if (!api || typeof api.getJSON !== "function" || typeof api.getUrl !== "function") return;
+        api.getJSON(api.getUrl("RadioMeta/MyCurrentTracks", { VersionCheck: true })).then(function (response) {
+            var serverVersion = response && typeof response.PluginVersion === "string" ? response.PluginVersion.trim() : "";
+            if (!serverVersion) return;
+            state.serverVersion = serverVersion;
+            if (compareVersion(SCRIPT_VERSION, serverVersion) >= 0) return;
+            state.scriptOutOfDate = true;
+            console.warn("Radio Meta " + SCRIPT_VERSION + ": this browser is running the cached player script " + SCRIPT_VERSION +
+                 " but the server runs Radio Meta " + serverVersion + "; press Ctrl+F5 to load the new version.");
+            return window.Emby.importModule("./modules/toast/toast.js").then(function (module) {
+                var showToast = module && module.default ? module.default : module;
+                if (typeof showToast === "function") {
+                    showToast({
+                        text: "Radio Meta was updated",
+                        secondaryText: "Press Ctrl+F5 (on a phone, close and reopen the tab) to load the new player."
+                    });
+                }
+            });
+        }).catch(function () { /* A failed check changes nothing. */ });
+    }
+
     function start() {
         if (state.started) return;
         state.started = true;
         tick().finally(scheduleNextTick);
+        window.setTimeout(checkPlayerScriptIsCurrent, 3000);
         document.addEventListener("visibilitychange", function () {
             if (document.visibilityState === "visible") tick();
         });
@@ -842,7 +1407,8 @@ define([], function () {
             updateDashboard([], []);
             tick();
         });
-        window.addEventListener("pagehide", restoreEventBusOverlay);
+        window.addEventListener("pagehide", releaseBigPlayerLineHold);
+        window.addEventListener("pagehide", function () { state.lastDisplayUpdates.clear(); });
         log("DLL-embedded integration started; native player display-item events are bridged without modifying Emby player source files");
     }
 
@@ -860,5 +1426,5 @@ define([], function () {
     }, 500);
 }());
 
-    return { version: "1.3.128" };
+    return { version: "1.3.152" };
 });

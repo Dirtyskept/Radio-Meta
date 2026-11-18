@@ -164,46 +164,9 @@ public sealed class CurrentStreamMetadataTestService : IService
         }
     }
 
-    private static bool IsSyntacticallyTestableUrl(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value) ||
-            !Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
-            !RadioMetaUriSchemeHelpers.IsHttpOrHttps(uri) ||
-            !string.IsNullOrEmpty(uri.UserInfo))
-        {
-            return false;
-        }
-
-        var path = uri.AbsolutePath;
-        if (path.StartsWith("/emby/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/Audio/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/Videos/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/Video/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/Items/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/LiveTv/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/PlaybackInfo/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/Sessions/", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        // Do not forward Emby/server authentication tokens to a stream host.
-        foreach (var part in uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
-        {
-            var separator = part.IndexOf('=');
-            var key = Uri.UnescapeDataString(separator >= 0 ? part[..separator] : part);
-            if (key.Equals("api_key", StringComparison.OrdinalIgnoreCase) ||
-                key.Equals("apikey", StringComparison.OrdinalIgnoreCase) ||
-                key.Equals("x-emby-token", StringComparison.OrdinalIgnoreCase) ||
-                key.Equals("access_token", StringComparison.OrdinalIgnoreCase) ||
-                key.Equals("authorization", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    // Delegates to the single shared syntactic check so the two copies cannot drift.
+    private static bool IsSyntacticallyTestableUrl(string value) =>
+        RadioMetadataTestUrlSafety.TryGetSafeTestUri(value, out _);
 
     private static CurrentStreamMetadataTestResponse Failure(string message, string stationName = "") => new()
     {

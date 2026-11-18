@@ -9,6 +9,12 @@ namespace RadioMeta;
 
 public sealed partial class RadioMetadataReader
 {
+    /// <summary>
+    /// Protocols FFmpeg/FFprobe may use for station streams. Excludes file, pipe,
+    /// concat, subfile and similar local or composite handlers.
+    /// </summary>
+    internal const string NetworkProtocolWhitelist = "http,https,tcp,tls,crypto,httpproxy";
+
     private RadioStationMetadata ReadUncached(
         string stationFilePath,
         string ffprobePath,
@@ -23,7 +29,9 @@ public sealed partial class RadioMetadataReader
         try
         {
             var stationInfo = new FileInfo(stationFilePath);
-            if (!stationInfo.Exists || stationInfo.Length > 64 * 1024)
+            // A virtual web-stream station has no file; its address comes from memory.
+            if (!RadioWebStreamStations.IsVirtualStation(stationFilePath) &&
+                (!stationInfo.Exists || stationInfo.Length > 64 * 1024))
                 return FailureForStation(stationName, string.Empty, string.Empty, "Station file is missing or exceeds the 64 KB safety limit.");
         }
         catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException)
@@ -71,6 +79,9 @@ public sealed partial class RadioMetadataReader
             startInfo.ArgumentList.Add("format=format_name:format_tags");
             startInfo.ArgumentList.Add("-of");
             startInfo.ArgumentList.Add("json");
+            // Restrict FFprobe to network protocols (see NetworkProtocolWhitelist).
+            startInfo.ArgumentList.Add("-protocol_whitelist");
+            startInfo.ArgumentList.Add(NetworkProtocolWhitelist);
             startInfo.ArgumentList.Add(streamUrl);
 
             using var process = new Process
@@ -216,6 +227,7 @@ public sealed partial class RadioMetadataReader
 
     private static string ReadStreamUrl(string stationFilePath)
     {
+        if (RadioWebStreamStations.TryGetStreamUrl(stationFilePath, out var webStreamUrl)) return webStreamUrl;
         if (RadioMetaProxyService.TryGetUpstreamUrl(stationFilePath, out var proxyUpstream)) return proxyUpstream;
         try
         {

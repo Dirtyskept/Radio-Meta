@@ -30,7 +30,7 @@ internal static class RadioBrowserStationResolver
     private static HttpClient CreateHttpClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromSeconds(4) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("RadioMeta/1.3.41 station-prefill");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(RadioMetaBuildInfo.UserAgent("station-prefill"));
         return client;
     }
 
@@ -193,21 +193,16 @@ internal static class RadioBrowserStationResolver
     {
         if (string.IsNullOrWhiteSpace(value) || !Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri)) return false;
         if (!RadioMetaUriSchemeHelpers.IsHttpHttpsOrIcy(uri)) return false;
-        if (!string.IsNullOrEmpty(uri.UserInfo)) return false;
-        return uri.Query.IndexOf("api_key", StringComparison.OrdinalIgnoreCase) < 0 &&
-               uri.Query.IndexOf("access_token", StringComparison.OrdinalIgnoreCase) < 0 &&
-               uri.Query.IndexOf("emby_token", StringComparison.OrdinalIgnoreCase) < 0 &&
-               uri.Query.IndexOf("x-emby-token", StringComparison.OrdinalIgnoreCase) < 0;
+        return !RadioMetaUriSchemeHelpers.HasEmbeddedCredentials(uri);
     }
 
     private static bool IsSafeArtworkUrl(string value)
     {
         if (string.IsNullOrWhiteSpace(value) || !Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri)) return false;
         if (!RadioMetaUriSchemeHelpers.IsHttpOrHttps(uri)) return false;
-        if (!string.IsNullOrEmpty(uri.UserInfo)) return false;
-        if (uri.Query.IndexOf("api_key", StringComparison.OrdinalIgnoreCase) >= 0 ||
-            uri.Query.IndexOf("access_token", StringComparison.OrdinalIgnoreCase) >= 0)
-            return false;
+        // Previously only api_key/access_token were rejected here; the shared check
+        // also rejects emby_token, x-emby-token, apikey and authorization.
+        if (RadioMetaUriSchemeHelpers.HasEmbeddedCredentials(uri)) return false;
         var ext = System.IO.Path.GetExtension(uri.AbsolutePath);
         return ext.Length == 0 || new[] { ".jpg", ".jpeg", ".png" }.Contains(ext, StringComparer.OrdinalIgnoreCase);
     }

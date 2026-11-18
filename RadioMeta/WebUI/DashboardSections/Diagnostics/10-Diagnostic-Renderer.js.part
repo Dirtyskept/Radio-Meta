@@ -1,18 +1,18 @@
         function diagnosticRender(checks, headerLines, recentEvents, performance) {
             recentEvents = Array.isArray(recentEvents) ? recentEvents : [];
             performance = performance && typeof performance === 'object' ? performance : null;
-            var results = view.querySelector('#radioDiagnosticsResults');
-            var summary = view.querySelector('#radioDiagnosticsSummary');
-            var checkList = view.querySelector('#radioDiagnosticsChecks');
-            var eventsSection = view.querySelector('#radioDiagnosticsEvents');
-            var eventList = view.querySelector('#radioDiagnosticsEventList');
-            var performanceSection = view.querySelector('#radioDiagnosticsPerformance');
-            var performanceSummary = view.querySelector('#radioDiagnosticsPerformanceSummary');
-            var performanceList = view.querySelector('#radioDiagnosticsPerformanceList');
-            var report = view.querySelector('#radioDiagnosticsReport');
-            var status = view.querySelector('#radioDiagnosticsStatus');
-            var runButton = view.querySelector('#radioDiagnosticsRun');
-            var copyButton = view.querySelector('#radioDiagnosticsCopy');
+            var results = radioMetaById('radioDiagnosticsResults');
+            var summary = radioMetaById('radioDiagnosticsSummary');
+            var checkList = radioMetaById('radioDiagnosticsChecks');
+            var eventsSection = radioMetaById('radioDiagnosticsEvents');
+            var eventList = radioMetaById('radioDiagnosticsEventList');
+            var performanceSection = radioMetaById('radioDiagnosticsPerformance');
+            var performanceSummary = radioMetaById('radioDiagnosticsPerformanceSummary');
+            var performanceList = radioMetaById('radioDiagnosticsPerformanceList');
+            var report = radioMetaById('radioDiagnosticsReport');
+            var status = radioMetaById('radioDiagnosticsStatus');
+            var runButton = radioMetaById('radioDiagnosticsRun');
+            var copyButton = radioMetaById('radioDiagnosticsCopy');
             if (!results || !summary || !checkList || !report || !status) return;
 
             var passCount = checks.filter(function (item) { return item.status === 'PASS'; }).length;
@@ -31,18 +31,22 @@
             while (checkList.firstChild) checkList.removeChild(checkList.firstChild);
             checks.forEach(function (item) {
                 var row = document.createElement('div');
-                row.className = 'radio-diagnostic-check';
+                row.className = 'listItem listItem-border radio-diagnostic-check';
                 var state = document.createElement('span');
                 state.className = 'radio-diagnostic-status ' + item.status.toLowerCase();
                 state.textContent = item.status;
-                var name = document.createElement('strong');
+                var body = document.createElement('div');
+                body.className = 'listItemBody two-line';
+                var name = document.createElement('div');
+                name.className = 'listItemBodyText';
                 name.textContent = item.name;
-                var detail = document.createElement('span');
-                detail.className = 'radio-diagnostic-detail';
+                var detail = document.createElement('div');
+                detail.className = 'listItemBodyText listItemBodyText-secondary secondaryText radio-diagnostic-detail';
                 detail.textContent = item.detail;
+                body.appendChild(name);
+                body.appendChild(detail);
                 row.appendChild(state);
-                row.appendChild(name);
-                row.appendChild(detail);
+                row.appendChild(body);
                 checkList.appendChild(row);
             });
 

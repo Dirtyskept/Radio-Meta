@@ -6,6 +6,7 @@ using System.Linq;
 using MediaBrowser.Common;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Plugins;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Logging;
@@ -104,6 +105,12 @@ public sealed class PluginConfiguration : BasePluginConfiguration
     // Number of most-recent played tracks retained in the history JSON.
     public int RadioHistoryLimit { get; set; } = 200;
 
+    // Also read metadata for audio .strm stations outside StationFolder, for example
+    // in a library made by another plugin. Uses the same rule as automatic mode: the
+    // playing .strm must be an Emby Audio item. Other folders are never listed,
+    // scanned or edited; station management stays limited to StationFolder.
+    public bool EnableStationsOutsideFolder { get; set; } = true;
+
     // Phrases that should not be treated as song metadata. A blank station name
     // applies the rule globally; a station-specific rule matches the .strm name.
     public List<RadioMetadataIgnorePhraseRule> IgnoreMetadataPhrases { get; set; } = new();
@@ -130,6 +137,10 @@ public sealed class RadioMetaPlugin :
 
     /// <summary>Bounded in-memory history of station-file and post-change refresh results.</summary>
     public RadioMetaStationOperationStore StationOperationEvents { get; } = new();
+    public RadioMetaSettingsSaveStore SettingsSaveEvents { get; } = new();
+
+    /// <summary>Radio Meta's Emby logger, set by the entry point at start-up; null until then.</summary>
+    public ILogger? EmbyLogger { get; set; }
 
     public RadioMetaPerformanceMetricsStore PerformanceMetrics { get; } = new();
 
@@ -188,6 +199,25 @@ public sealed class RadioMetaPlugin :
 
     public override Guid Id =>
         Guid.Parse("8a7f6e31-9d42-4b85-a103-72c6f0e54b19");
+
+    /// <summary>
+    /// Emby calls this before it deletes the plugin DLL. This is the only time Radio
+    /// Meta removes its block from dashboard-ui/index.html; at normal shutdown the
+    /// block stays, so a browser loading the page during a restart still gets it.
+    /// </summary>
+    public override void OnUninstalling()
+    {
+        try
+        {
+            RadioMetaPlayerIntegration.RemoveForUninstall(ApplicationPaths);
+        }
+        catch
+        {
+            // Uninstall must never fail because of this clean-up.
+        }
+
+        base.OnUninstalling();
+    }
 
     public override string ConfigurationFileName =>
         "8a7f6e31-9d42-4b85-a103-72c6f0e54b19.xml";
@@ -275,20 +305,6 @@ public sealed class RadioMetaPlugin :
     public int GetRadioHistoryLimit() =>
         Math.Clamp(Configuration.RadioHistoryLimit, 1, 5000);
 
-    /// <summary>
-    /// Compatibility forwarding method. Metadata decisions are centralized in
-    /// CurrentTrackService so readers and session consumers use the same rules.
-    /// </summary>
-    public bool IsMetadataPhraseIgnored(string? stationName, string? candidate) =>
-        CurrentTrackService.IsMetadataPhraseIgnored(stationName, candidate);
-
-    /// <summary>
-    /// Compatibility forwarding method for the station-specific metadata mode.
-    /// The centralized current-track service owns the lookup-mode decision.
-    /// </summary>
-    public bool IsStationMetadataLookupDisabled(string? stationName, string? deviceName = null) =>
-        CurrentTrackService.IsStationMetadataLookupDisabled(stationName, deviceName);
-
     private static string? FindExecutableOnPath(string executableName)
     {
         if (string.IsNullOrWhiteSpace(executableName))
@@ -355,6 +371,8 @@ public sealed class RadioMetaPlugin :
 public sealed class RadioMetaEntryPoint : IServerEntryPoint
 {
     private static RadioMetaProxyService? _activeProxyService;
+    private static RadioMetaEntryPoint? _activeEntryPoint;
+    private static readonly object ProxyStartLock = new();
     internal static string GetProxyBaseUrl() => _activeProxyService?.BaseUrl ?? string.Empty;
     internal static RadioMetaProxyService? GetActiveProxyService() => _activeProxyService;
 
@@ -362,6 +380,8 @@ public sealed class RadioMetaEntryPoint : IServerEntryPoint
     private readonly RadioMetaPlugin? _plugin;
     private readonly ISessionManager _sessionManager;
     private readonly IApplicationPaths _applicationPaths;
+    private readonly IMediaSourceManager? _mediaSourceManager;
+    private readonly IUserManager? _userManager;
 
     private RadioMetaPlayerIntegration? _playerIntegration;
     private RadioMetaSessionTitleInjector? _titleInjector;
@@ -379,6 +399,13 @@ public sealed class RadioMetaEntryPoint : IServerEntryPoint
 
         _sessionManager = applicationHost.Resolve<ISessionManager>();
         _applicationPaths = applicationHost.Resolve<IApplicationPaths>();
+
+        // Used only to find the stream address of web-address stations (for
+        // example WebStreams); without them that feature is simply off.
+        try { _mediaSourceManager = applicationHost.Resolve<IMediaSourceManager>(); }
+        catch { _mediaSourceManager = null; }
+        try { _userManager = applicationHost.Resolve<IUserManager>(); }
+        catch { _userManager = null; }
     }
 
     public void Run()
@@ -392,9 +419,15 @@ public sealed class RadioMetaEntryPoint : IServerEntryPoint
 
         _plugin.MemoryDiagnostics.Start();
 
+        // Settings saves go to the Emby log too (1.3.152). Whether the station
+        // folder is set at start-up is already logged below ("configuration loaded").
+        _plugin.SettingsSaveEvents.Logger = _logger;
+        _plugin.EmbyLogger = _logger;
+
         // The DLL owns the complete player integration. It embeds the script,
-        // serves it through the plugin resource route, and adds one reversible
-        // reference to dashboard-ui/index.html. No Emby player module is patched.
+        // serves it through the plugin resource route, and keeps one marked
+        // reference in dashboard-ui/index.html (added in the background if missing,
+        // removed only on uninstall). No Emby player module is patched.
         try
         {
             _playerIntegration = new RadioMetaPlayerIntegration(_applicationPaths, _logger);
@@ -403,7 +436,7 @@ public sealed class RadioMetaEntryPoint : IServerEntryPoint
         catch (Exception ex)
         {
             _logger.Error(
-                "Radio Meta 1.3.128 player integration startup failed ({0}).",
+                "Radio Meta " + RadioMetaBuildInfo.Version + " player integration startup failed ({0}).",
                 ex.GetType().Name);
         }
 
@@ -451,24 +484,18 @@ public sealed class RadioMetaEntryPoint : IServerEntryPoint
         _currentlyPlayingStationCapture.Start();
         _plugin.StationCaptureStarted = _currentlyPlayingStationCapture.IsStarted;
 
+        _activeEntryPoint = this;
         if (folderAvailable)
         {
-            try
-            {
-                var ffmpegPath = RadioMetaProxyService.ResolveFfmpegPath(ffprobePath);
-                _proxyService = new RadioMetaProxyService(folder, ffmpegPath, _logger);
-                _activeProxyService = _proxyService;
-            }
-            catch (Exception ex)
-            {
-                _logger.Warn("Radio Meta proxy did not start ({0}); normal station playback remains unchanged.", ex.GetType().Name);
-            }
+            StartProxy(folder, ffprobePath);
         }
 
         _titleInjector = new RadioMetaSessionTitleInjector(
             _plugin,
             _sessionManager,
-            _logger);
+            _logger,
+            _mediaSourceManager,
+            _userManager);
 
         _titleInjector.Start();
         _plugin.SessionMetadataPublisherStarted = _titleInjector.IsStarted;
@@ -520,8 +547,48 @@ public sealed class RadioMetaEntryPoint : IServerEntryPoint
         _titleInjector?.Dispose();
         _titleInjector = null;
         if (_plugin is not null) _plugin.SessionMetadataPublisherStarted = false;
-        _proxyService?.Dispose();
-        if (ReferenceEquals(_activeProxyService, _proxyService)) _activeProxyService = null;
-        _proxyService = null;
+        lock (ProxyStartLock)
+        {
+            if (ReferenceEquals(_activeEntryPoint, this)) _activeEntryPoint = null;
+            _proxyService?.Dispose();
+            if (ReferenceEquals(_activeProxyService, _proxyService)) _activeProxyService = null;
+            _proxyService = null;
+        }
+    }
+
+    private void StartProxy(string folder, string ffprobePath)
+    {
+        lock (ProxyStartLock)
+        {
+            if (_proxyService is not null) return;
+            try
+            {
+                var ffmpegPath = RadioMetaProxyService.ResolveFfmpegPath(ffprobePath);
+                _proxyService = new RadioMetaProxyService(folder, ffmpegPath, _logger);
+                _activeProxyService = _proxyService;
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn("Radio Meta proxy did not start ({0}); normal station playback remains unchanged.", ex.GetType().Name);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Starts the proxy if it isn't running and the configured station folder now
+    /// exists. Used when Path settings are saved, so a folder that was missing when
+    /// Emby started doesn't need a restart. Returns true when the proxy is running.
+    /// </summary>
+    internal static bool EnsureProxyRunning()
+    {
+        var entryPoint = _activeEntryPoint;
+        if (entryPoint is null || entryPoint._plugin is null) return false;
+        if (_activeProxyService is not null) return true;
+
+        var folder = entryPoint._plugin.GetStationFolder();
+        if (folder.Length == 0 || !Directory.Exists(folder)) return false;
+
+        entryPoint.StartProxy(folder, entryPoint._plugin.GetFfprobePath());
+        return _activeProxyService is not null;
     }
 }

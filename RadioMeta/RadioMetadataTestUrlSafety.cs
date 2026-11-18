@@ -13,6 +13,19 @@ namespace RadioMeta;
 /// <remarks>Normal playback keeps its established request behavior; this validator is used by the explicit test endpoint and its redirects.</remarks>
 internal static class RadioMetadataTestUrlSafety
 {
+    // Emby server API paths that must never be treated as an external stream.
+    private static readonly string[] EmbyServerPathPrefixes =
+    {
+        "/emby/",
+        "/Audio/",
+        "/Videos/",
+        "/Video/",
+        "/Items/",
+        "/LiveTv/",
+        "/PlaybackInfo/",
+        "/Sessions/",
+    };
+
     internal static async Task<bool> IsSafeExternalTestUrlAsync(
         string value, CancellationToken cancellationToken = default)
     {
@@ -110,47 +123,26 @@ internal static class RadioMetadataTestUrlSafety
         }
     }
 
-    private static bool TryGetSafeTestUri(string value, out Uri uri)
+    /// <summary>
+    /// Syntactic checks shared by every stream-test entry point: absolute HTTP(S),
+    /// bounded length, a host, no embedded credentials, and not an Emby server path.
+    /// Public-address enforcement happens separately at connect time.
+    /// </summary>
+    internal static bool TryGetSafeTestUri(string value, out Uri uri)
     {
         uri = null!;
         if (string.IsNullOrWhiteSpace(value) || value.Length > 8192 ||
             !Uri.TryCreate(value.Trim(), UriKind.Absolute, out var parsed) ||
             !RadioMetaUriSchemeHelpers.IsHttpOrHttps(parsed) ||
-            !string.IsNullOrEmpty(parsed.UserInfo) ||
             string.IsNullOrWhiteSpace(parsed.Host))
         {
             return false;
         }
 
-        var path = parsed.AbsolutePath;
-        if (path.StartsWith("/emby/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/Audio/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/Videos/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/Video/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/Items/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/LiveTv/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/PlaybackInfo/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/Sessions/", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
         // Never forward Emby/server authentication tokens to a stream host.
-        foreach (var part in parsed.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
-        {
-            var separator = part.IndexOf('=');
-            string key;
-            try { key = Uri.UnescapeDataString(separator >= 0 ? part[..separator] : part); }
-            catch { return false; }
-            if (key.Equals("api_key", StringComparison.OrdinalIgnoreCase) ||
-                key.Equals("apikey", StringComparison.OrdinalIgnoreCase) ||
-                key.Equals("x-emby-token", StringComparison.OrdinalIgnoreCase) ||
-                key.Equals("access_token", StringComparison.OrdinalIgnoreCase) ||
-                key.Equals("authorization", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-        }
+        if (RadioMetaUriSchemeHelpers.HasEmbeddedCredentials(parsed)) return false;
+
+        if (RadioMetaUriSchemeHelpers.PathStartsWithAny(parsed, EmbyServerPathPrefixes)) return false;
 
         uri = parsed;
         return true;

@@ -21,6 +21,12 @@ public sealed class RadioPlayedItem
     // has no value; readers fall back to SongTitle for those entries.
     public string OriginalSongTitle { get; set; } = string.Empty;
     public DateTimeOffset PlayedAt { get; set; }
+    // Emby library item the play came from (InternalId; 0 = unknown, as in older
+    // history JSON) and its library name when recorded. History shows the item's
+    // current library name, so renames in Emby appear here. StationName stays the
+    // .strm file name and is what corrections and rules match on.
+    public long LibraryItemId { get; set; }
+    public string LibraryName { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -94,7 +100,9 @@ public sealed class RadioPlayHistoryStore
         string stationName,
         string artist,
         string songTitle,
-        string? originalSongTitle = null)
+        string? originalSongTitle = null,
+        long libraryItemId = 0,
+        string? libraryName = null)
     {
         stationName = Limit((stationName ?? string.Empty).Trim(), 160);
         artist = Limit((artist ?? string.Empty).Trim(), 300);
@@ -132,7 +140,9 @@ public sealed class RadioPlayHistoryStore
                 Artist = artist,
                 SongTitle = songTitle,
                 OriginalSongTitle = originalSongTitle,
-                PlayedAt = now
+                PlayedAt = now,
+                LibraryItemId = libraryItemId > 0 ? libraryItemId : 0,
+                LibraryName = Limit((libraryName ?? string.Empty).Trim(), 160)
             });
 
             TrimToLimit();
@@ -154,48 +164,6 @@ public sealed class RadioPlayHistoryStore
         {
             var item = _items.FirstOrDefault(candidate => candidate.Id == id);
             return item is null ? null : Clone(item);
-        }
-    }
-
-    /// <summary>Updates only the displayed song title for one history entry.
-    /// The previous value is returned so the caller can roll back related config changes if needed.</summary>
-    public bool UpdateSongTitle(Guid id, string correctedTitle, out string previousTitle, out string error)
-    {
-        previousTitle = string.Empty;
-        error = string.Empty;
-        correctedTitle = (correctedTitle ?? string.Empty).Trim();
-        if (id == Guid.Empty || correctedTitle.Length == 0 || correctedTitle.Length > 300)
-        {
-            error = "A valid history entry and corrected title are required (1–300 characters).";
-            return false;
-        }
-
-        lock (_gate)
-        {
-            var item = _items.FirstOrDefault(candidate => candidate.Id == id);
-            if (item is null)
-            {
-                error = "That history entry no longer exists. Refresh the page and try again.";
-                return false;
-            }
-
-            previousTitle = item.SongTitle;
-            var previousOriginalTitle = item.OriginalSongTitle;
-            if (string.IsNullOrWhiteSpace(item.OriginalSongTitle))
-            {
-                // For legacy JSON rows, preserve the first known title before editing it.
-                item.OriginalSongTitle = item.SongTitle;
-            }
-            item.SongTitle = correctedTitle;
-            if (Save())
-            {
-                return true;
-            }
-
-            item.SongTitle = previousTitle;
-            item.OriginalSongTitle = previousOriginalTitle;
-            error = "The corrected title could not be saved to history. Check plugin configuration-folder permissions.";
-            return false;
         }
     }
 
@@ -423,7 +391,9 @@ public sealed class RadioPlayHistoryStore
         Artist = item.Artist,
         SongTitle = item.SongTitle,
         OriginalSongTitle = item.OriginalSongTitle,
-        PlayedAt = item.PlayedAt
+        PlayedAt = item.PlayedAt,
+        LibraryItemId = item.LibraryItemId,
+        LibraryName = item.LibraryName
     };
 
     private static bool Same(string first, string second) =>

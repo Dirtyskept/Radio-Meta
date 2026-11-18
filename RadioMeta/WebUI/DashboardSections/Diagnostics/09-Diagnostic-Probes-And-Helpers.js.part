@@ -175,7 +175,7 @@
         }
 
         function diagnosticSetCopyButtonVisible(visible) {
-            var button = view.querySelector('#radioDiagnosticsCopy');
+            var button = radioMetaById('radioDiagnosticsCopy');
             if (button) button.style.display = visible ? '' : 'none';
         }
 

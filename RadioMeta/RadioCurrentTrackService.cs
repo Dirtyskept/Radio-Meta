@@ -55,10 +55,6 @@ public sealed class RadioCurrentTrackService
         IEnumerable<string?> stationNames, string? deviceName = null) =>
         _metadataPolicy.GetStationMetadataModeDiagnostic(stationNames, deviceName);
 
-    /// <summary>Returns whether the applicable rule uses Carplay mode.</summary>
-    public bool IsStationCarplayMode(string? stationName, string? deviceName = null) =>
-        _metadataPolicy.IsStationCarplayMode(stationName, deviceName);
-
     /// <summary>Returns whether the applicable rule is StationDelay mode.</summary>
     public bool IsStationDelayMode(string? stationName, string? deviceName = null) =>
         _metadataPolicy.IsStationDelayMode(stationName, deviceName);
@@ -271,7 +267,11 @@ public sealed class RadioCurrentTrackService
 
     /// <summary>Writes an accepted track to persistent history at most once per
     /// track change in this session. The store also deduplicates across sessions.</summary>
-    public bool RecordAcceptedTrack(RadioCurrentTrack track, bool shouldRecordHistory)
+    public bool RecordAcceptedTrack(
+        RadioCurrentTrack track,
+        bool shouldRecordHistory,
+        long libraryItemId = 0,
+        string? libraryName = null)
     {
         if (!shouldRecordHistory || track is null)
         {
@@ -282,7 +282,9 @@ public sealed class RadioCurrentTrackService
             track.StationName,
             track.Artist,
             track.SongTitle,
-            track.RawSongTitle) == true;
+            track.RawSongTitle,
+            libraryItemId,
+            libraryName) == true;
     }
 
     /// <summary>Publishes accepted track metadata as machine-readable ProviderIds on the active Emby session DTO.</summary>

@@ -1,6 +1,6 @@
         function updateHistoryVisibilityButton() {
             // The left-hand history button is the single show/hide control.
-            var button = view.querySelector('#radioHistoryScan');
+            var button = radioMetaById('radioHistoryScan');
             if (!button) return;
             var label = button.querySelector('span');
             if (label) label.textContent = historyPanelVisible ? 'Hide History' : 'Show History';
@@ -8,7 +8,7 @@
         }
 
         function toggleHistoryVisibility() {
-            var panel = view.querySelector('#radioHistoryPanel');
+            var panel = radioMetaById('radioHistoryPanel');
             if (!panel) return;
 
             if (historyPanelVisible) {
@@ -28,8 +28,8 @@
 
         function loadHistory() {
             if (!historyPanelVisible) return;
-            var status = view.querySelector('#radioStatus');
-            var container = view.querySelector('#radioHistory');
+            var status = radioMetaById('radioStatus');
+            var container = radioMetaById('radioHistory');
 
             if (!status || !container) {
                 return;
@@ -60,7 +60,7 @@
                     historyItems = items;
                     var configuredLimit = Number(getValue(data, 'Limit', 'limit')) || 200;
                     container.replaceChildren();
-                    var clearButton = view.querySelector('#radioHistoryClear');
+                    var clearButton = radioMetaById('radioHistoryClear');
                     if (clearButton) {
                         clearButton.disabled = !items.length || historyActionInProgress;
                     }
@@ -71,25 +71,9 @@
                         return;
                     }
 
-                    var table = document.createElement('table');
-                    table.className = 'radio-history-table';
-                    table.setAttribute('aria-label', 'Radio history');
-
-                    var thead = document.createElement('thead');
-                    var headerRow = document.createElement('tr');
-                    ['#', 'Station', 'Song Title', 'Artist', 'Date/Time', 'Actions'].forEach(function (label) {
-                        var th = document.createElement('th');
-                        th.scope = 'col';
-                        th.textContent = label;
-                        headerRow.appendChild(th);
-                    });
-                    thead.appendChild(headerRow);
-                    table.appendChild(thead);
-
-                    var tbody = document.createElement('tbody');
-                    items.forEach(function (item, itemIndex) {
-                        var row = document.createElement('tr');
-                        row.className = 'radio-history-row' + (itemIndex % 2 === 1 ? ' radio-history-row-alternate' : '');
+                    items.forEach(function (item) {
+                        var row = document.createElement('div');
+                        row.className = 'listItem listItem-border radio-history-row';
 
                         var artist = getValue(item, 'Artist', 'artist');
                         var songTitle = getValue(item, 'SongTitle', 'songTitle');
@@ -99,40 +83,52 @@
                         row.setAttribute('data-history-row-id', id);
                         row.setAttribute('data-current-title', songTitle || '');
 
-                        addText(row, 'radio-history-number', String(itemIndex + 1), 'td');
-                        addText(row, 'radio-history-station', stationName || '—', 'td');
-                        addText(row, 'radio-history-song', songTitle || (artist ? 'Unknown title' : 'Unknown track'), 'td');
-                        addText(row, 'radio-history-artist', artist || '—', 'td');
-                        addText(row, 'radio-history-played-at', formatPlayedAt(playedAt) || '—', 'td');
+                        // Song and artist on the first line; station and time on the
+                        // second. The station's current Emby library name is shown;
+                        // StationName (the .strm file name) is shown on hover when it differs.
+                        var body = document.createElement('div');
+                        body.className = 'listItemBody two-line';
+                        var firstLine = document.createElement('div');
+                        firstLine.className = 'listItemBodyText';
+                        addText(firstLine, 'radio-history-song', songTitle || (artist ? 'Unknown title' : 'Unknown track'), 'span');
+                        firstLine.appendChild(document.createTextNode(' — '));
+                        addText(firstLine, 'radio-history-artist', artist || '—', 'span');
+                        body.appendChild(firstLine);
+                        var secondLine = document.createElement('div');
+                        secondLine.className = 'listItemBodyText listItemBodyText-secondary secondaryText';
+                        var displayStationName = getValue(item, 'DisplayStationName', 'displayStationName') || stationName;
+                        var stationCell = addText(secondLine, 'radio-history-station', displayStationName || '—', 'span');
+                        if (stationName && displayStationName && String(displayStationName) !== String(stationName)) {
+                            stationCell.setAttribute('title', 'File name: ' + stationName);
+                        }
+                        secondLine.appendChild(document.createTextNode(' · '));
+                        addText(secondLine, 'radio-history-played-at', formatPlayedAt(playedAt) || '—', 'span');
+                        body.appendChild(secondLine);
+                        row.appendChild(body);
 
-                        var actions = document.createElement('td');
-                        actions.className = 'radio-history-actions';
                         if (id) {
                             var editButton = document.createElement('button');
                             editButton.type = 'button';
-                            editButton.className = 'emby-button raised radio-history-edit';
+                            editButton.className = 'radio-history-edit';
                             editButton.setAttribute('data-history-edit-id', id);
                             editButton.setAttribute('aria-label', 'Edit title for ' + (songTitle || 'Unknown track'));
                             editButton.setAttribute('title', 'Edit title');
                             editButton.disabled = historyActionInProgress;
                             makePencilIcon(editButton);
-                            actions.appendChild(editButton);
+                            row.appendChild(editButton);
 
                             var deleteButton = document.createElement('button');
                             deleteButton.type = 'button';
-                            deleteButton.className = 'emby-button raised button-delete radio-history-delete';
+                            deleteButton.className = 'radio-history-delete';
                             deleteButton.setAttribute('data-history-delete-id', id);
                             deleteButton.setAttribute('aria-label', 'Delete history entry ' + (songTitle || 'Unknown track'));
                             deleteButton.setAttribute('title', 'Delete entry');
                             deleteButton.disabled = historyActionInProgress;
                             makeTrashIcon(deleteButton);
-                            actions.appendChild(deleteButton);
+                            row.appendChild(deleteButton);
                         }
-                        row.appendChild(actions);
-                        tbody.appendChild(row);
+                        container.appendChild(row);
                     });
-                    table.appendChild(tbody);
-                    container.appendChild(table);
 
                     status.textContent = items.length >= configuredLimit
                         ? 'Showing the ' + configuredLimit + ' most recent played items, newest first.'
@@ -158,7 +154,7 @@
         }
 
         function findHistoryEditorRow(id) {
-            return Array.from(view.querySelectorAll('tr[data-history-editor-for]')).find(function (row) {
+            return radioMetaQueryAll('[data-history-editor-for]').find(function (row) {
                 return row.getAttribute('data-history-editor-for') === String(id || '');
             }) || null;
         }
@@ -273,7 +269,7 @@
             var scrollSnapshot = captureRadioMetaScrollPosition();
             var targetId = id || activeHistoryEditId;
             var editorRow = findHistoryEditorRow(targetId);
-            if (editorRow && editorRow.parentNode) editorRow.parentNode.removeChild(editorRow);
+            if (editorRow) closeRadioMetaDialogs('history-edit');
             if (!id || activeHistoryEditId === id) activeHistoryEditId = '';
             restoreRadioMetaScrollPosition(scrollSnapshot);
         }
@@ -288,7 +284,7 @@
             if (activeHistoryEditId) closeHistoryEditor(activeHistoryEditId);
 
             var item = findHistoryItem(id);
-            var row = Array.from(view.querySelectorAll('tr[data-history-row-id]')).find(function (candidate) {
+            var row = Array.from(view.querySelectorAll('[data-history-row-id]')).find(function (candidate) {
                 return candidate.getAttribute('data-history-row-id') === String(id);
             });
             if (!item || !row || !row.parentNode) return;
@@ -297,14 +293,12 @@
             var currentArtist = String(getValue(item, 'Artist', 'artist') || '');
             var originalTitle = String(getValue(item, 'OriginalSongTitle', 'originalSongTitle') || currentTitle);
             if (!originalTitle) originalTitle = currentTitle;
-            var editorRow = document.createElement('tr');
-            editorRow.className = 'radio-history-edit-row';
+            var editorRow = document.createElement('div');
+            editorRow.className = 'radioMetaDialogForm radio-history-edit-row';
             editorRow.setAttribute('data-history-editor-for', id);
             editorRow.setAttribute('data-original-title', originalTitle);
             editorRow.setAttribute('data-current-title', currentTitle);
             editorRow.setAttribute('data-current-artist', currentArtist);
-            var cell = document.createElement('td');
-            cell.colSpan = 6;
             var editor = document.createElement('div');
             editor.className = 'radio-history-inline-editor';
 
@@ -314,15 +308,10 @@
             artistField.className = 'radio-history-edit-field';
             var artistFound = addText(artistField, 'radio-history-edit-found-value', 'Artist found: ' + (currentArtist || '(empty)'), 'div');
             artistFound.style.cssText = 'font-size:0.85em;opacity:0.75;overflow-wrap:anywhere;margin-bottom:2px;';
-            var artistLabel = document.createElement('label');
-            artistLabel.textContent = 'Corrected artist';
-            var artistInput = document.createElement('input');
-            artistInput.type = 'text';
-            artistInput.className = 'emby-input';
-            artistInput.maxLength = 300;
-            artistInput.value = currentArtist;
+            var artistFieldParts = makeRadioMetaField('Corrected artist', 'text', 300, currentArtist);
+            var artistLabel = artistFieldParts.container;
+            var artistInput = artistFieldParts.input;
             artistInput.setAttribute('data-history-edit-artist', 'true');
-            artistLabel.appendChild(artistInput);
             artistField.appendChild(artistLabel);
             fields.appendChild(artistField);
 
@@ -330,22 +319,17 @@
             correctedField.className = 'radio-history-edit-field';
             var titleFound = addText(correctedField, 'radio-history-edit-found-value', 'Title found: ' + originalTitle, 'div');
             titleFound.style.cssText = 'font-size:0.85em;opacity:0.75;overflow-wrap:anywhere;margin-bottom:2px;';
-            var correctedLabel = document.createElement('label');
-            correctedLabel.textContent = 'Corrected song title';
-            var correctedInput = document.createElement('input');
-            correctedInput.type = 'text';
-            correctedInput.className = 'emby-input';
-            correctedInput.maxLength = 300;
-            correctedInput.value = currentTitle;
+            var correctedFieldParts = makeRadioMetaField('Corrected song title', 'text', 300, currentTitle);
+            var correctedLabel = correctedFieldParts.container;
+            var correctedInput = correctedFieldParts.input;
             correctedInput.setAttribute('data-history-edit-corrected', 'true');
-            correctedLabel.appendChild(correctedInput);
             correctedField.appendChild(correctedLabel);
             fields.appendChild(correctedField);
             editor.appendChild(fields);
 
             addText(editor, '', 'Apply correction to:', 'strong');
             var scope = document.createElement('div');
-            scope.className = 'radio-history-edit-scope';
+            scope.className = 'radio-history-edit-scope radioMetaEditScope';
             [
                 { value: 'SongOnly', label: 'This song only', checked: true },
                 { value: 'Station', label: 'Entire station', checked: false }
@@ -365,18 +349,12 @@
 
             var preserveField = document.createElement('div');
             preserveField.className = 'radio-history-edit-preserve';
-            var preserveLabel = document.createElement('label');
-            preserveLabel.textContent = 'Additional labels to preserve (for entire station)';
-            var preserveInput = document.createElement('input');
-            preserveInput.type = 'text';
-            preserveInput.className = 'emby-input';
-            preserveInput.maxLength = 500;
-            preserveInput.placeholder = 'e.g. Live, Radio Edit, Remastered';
+            var preserveFieldParts = makeRadioMetaField('Extra labels to keep (Entire station only)', 'text', 500, getPreserveLabelsForStation(String(getValue(item, 'StationName', 'stationName') || '')));
+            var preserveLabel = preserveFieldParts.container;
+            var preserveInput = preserveFieldParts.input;
             preserveInput.setAttribute('data-history-edit-preserve', 'true');
-            preserveInput.value = getPreserveLabelsForStation(String(getValue(item, 'StationName', 'stationName') || ''));
-            preserveLabel.appendChild(preserveInput);
             preserveField.appendChild(preserveLabel);
-            addText(preserveField, 'radio-history-edit-preserve-help', 'Common labels are already preserved. Add extra labels separated by commas or semicolons. Used only for Entire station.', 'div');
+            addText(preserveField, 'fieldDescription radio-history-edit-preserve-help', 'Common labels are already preserved. Add extra labels separated by commas or semicolons. Used only for Entire station.', 'div');
             editor.appendChild(preserveField);
 
             var preview = document.createElement('div');
@@ -386,7 +364,8 @@
             editor.appendChild(preview);
 
             var buttons = document.createElement('div');
-            buttons.className = 'radio-history-edit-actions';
+            buttons.className = 'radio-history-edit-actions radioMetaDialogButtons';
+            buttons.style.cssText = 'display:flex;gap:.5em;flex-wrap:wrap;';
             var cancel = document.createElement('button');
             cancel.type = 'button';
             cancel.className = 'emby-button raised radio-history-edit-cancel';
@@ -400,10 +379,14 @@
             buttons.appendChild(cancel);
             buttons.appendChild(save);
             editor.appendChild(buttons);
-            cell.appendChild(editor);
-            editorRow.appendChild(cell);
-            row.parentNode.insertBefore(editorRow, row.nextSibling);
+            editorRow.appendChild(editor);
             activeHistoryEditId = String(id);
+            openRadioMetaDialog({
+                key: 'history-edit',
+                title: 'Edit title',
+                content: editorRow,
+                onClose: function () { if (activeHistoryEditId === String(id)) activeHistoryEditId = ''; }
+            });
             artistInput.addEventListener('input', function () { updateHistoryEditPreview(editorRow); });
             correctedInput.addEventListener('input', function () { updateHistoryEditPreview(editorRow); });
             preserveInput.addEventListener('input', function () { updateHistoryEditPreview(editorRow); });
@@ -421,7 +404,7 @@
             var correctedInput = editorRow.querySelector('[data-history-edit-corrected]');
             var scopeInput = editorRow.querySelector('input[name="radioHistoryEditScope"]:checked');
             var preserveInput = editorRow.querySelector('[data-history-edit-preserve]');
-            var status = view.querySelector('#radioStatus');
+            var status = radioMetaById('radioStatus');
             var correctedArtist = artistInput ? artistInput.value.trim() : '';
             var correctedTitle = correctedInput ? correctedInput.value.trim() : '';
             var preserveLabels = preserveInput ? preserveInput.value.trim() : '';
@@ -470,18 +453,21 @@
                 type: 'POST',
                 url: ApiClient.getUrl('RadioMeta/History/Edit'),
                 data: JSON.stringify({ Id: id, CorrectedArtist: scope === 'Station' ? '' : correctedArtist, CorrectedTitle: correctedTitle, Scope: scope, PreserveLabels: preserveLabels }),
-                contentType: 'application/json'
-            }).then(function (data) {
+                contentType: 'application/json',
+                dataType: 'json'
+            }).then(radioMetaReadJson).then(function (data) {
                 var error = getValue(data, 'Error', 'error');
                 if (error) throw new Error(error);
 
                 item.SongTitle = correctedTitle;
                 if (scope !== 'Station' && correctedArtist) item.Artist = correctedArtist;
-                var historyRow = Array.from(view.querySelectorAll('tr[data-history-row-id]')).find(function (row) {
+                var historyRow = Array.from(view.querySelectorAll('[data-history-row-id]')).find(function (row) {
                     return row.getAttribute('data-history-row-id') === String(id);
                 });
-                if (historyRow && historyRow.children[2]) historyRow.children[2].textContent = correctedTitle;
-                if (historyRow && historyRow.children[3]) historyRow.children[3].textContent = item.Artist || '—';
+                var songCell = historyRow && historyRow.querySelector('.radio-history-song');
+                var artistCell = historyRow && historyRow.querySelector('.radio-history-artist');
+                if (songCell) songCell.textContent = correctedTitle;
+                if (artistCell) artistCell.textContent = item.Artist || '—';
                 closeHistoryEditor(String(id));
                 if (status) status.textContent = getValue(data, 'Message', 'message') || 'Artist/title correction saved.';
                 if (scope === 'Station') {

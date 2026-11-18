@@ -1,6 +1,6 @@
         function copyRadioMetaDiagnosticReport() {
-            var report = view.querySelector('#radioDiagnosticsReport');
-            var status = view.querySelector('#radioDiagnosticsStatus');
+            var report = radioMetaById('radioDiagnosticsReport');
+            var status = radioMetaById('radioDiagnosticsStatus');
             if (!report || !report.textContent) return;
             var text = report.textContent;
 
@@ -38,16 +38,16 @@
             } else fallbackCopy();
         }
 
-        var diagnosticsRunButton = view.querySelector('#radioDiagnosticsRun');
+        var diagnosticsRunButton = radioMetaById('radioDiagnosticsRun');
         if (diagnosticsRunButton) diagnosticsRunButton.addEventListener('click', runRadioMetaDiagnostics);
-        var diagnosticsCopyButton = view.querySelector('#radioDiagnosticsCopy');
+        var diagnosticsCopyButton = radioMetaById('radioDiagnosticsCopy');
         if (diagnosticsCopyButton) diagnosticsCopyButton.addEventListener('click', copyRadioMetaDiagnosticReport);
 
-        var stationScanButton = view.querySelector('#radioStationScanButton');
+        var stationScanButton = radioMetaById('radioStationScanButton');
         if (stationScanButton) {
             stationScanButton.addEventListener('click', toggleStationFolderVisibility);
         }
         updateStationFolderVisibilityButton();
-        var stationCreateButton = view.querySelector('#radioStationCreateButton');
+        var stationCreateButton = radioMetaById('radioStationCreateButton');
         if (stationCreateButton) stationCreateButton.addEventListener('click', createStationFile);
 

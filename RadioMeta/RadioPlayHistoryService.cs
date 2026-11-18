@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Net;
 using MediaBrowser.Model.Services;
 
@@ -9,6 +10,13 @@ namespace RadioMeta;
 [Authenticated(Roles = "Admin")]
 public sealed class RadioPlayHistoryService : IService
 {
+    private readonly ILibraryManager _libraryManager;
+
+    public RadioPlayHistoryService(ILibraryManager libraryManager)
+    {
+        _libraryManager = libraryManager;
+    }
+
     public object Post(DeleteRadioPlayHistoryEntry request)
     {
         var history = RadioMetaPlugin.Instance?.HistoryStore;
@@ -265,11 +273,13 @@ public sealed class RadioPlayHistoryService : IService
         }
 
         var limit = plugin.GetRadioHistoryLimit();
+        var currentLibraryNames = new Dictionary<long, string>();
         var entries = history.GetRecent(limit)
             .Select(item => new RadioPlayHistoryEntryDto
             {
                 Id = item.Id,
                 StationName = item.StationName,
+                DisplayStationName = GetDisplayStationName(item, currentLibraryNames),
                 Artist = item.Artist,
                 SongTitle = item.SongTitle,
                 OriginalSongTitle = string.IsNullOrWhiteSpace(item.OriginalSongTitle) ? item.SongTitle : item.OriginalSongTitle,
@@ -282,5 +292,34 @@ public sealed class RadioPlayHistoryService : IService
             Limit = limit,
             Items = entries
         };
+    }
+
+    /// <summary>
+    /// The name History shows: the library item's current name (so renames in Emby
+    /// appear at once), else the library name when recorded, else the .strm file name.
+    /// Looked up once per item per request.
+    /// </summary>
+    private string GetDisplayStationName(RadioPlayedItem item, Dictionary<long, string> currentLibraryNames)
+    {
+        if (item.LibraryItemId > 0)
+        {
+            if (!currentLibraryNames.TryGetValue(item.LibraryItemId, out var currentName))
+            {
+                try
+                {
+                    currentName = (_libraryManager.GetItemById(item.LibraryItemId)?.Name ?? string.Empty).Trim();
+                }
+                catch
+                {
+                    currentName = string.Empty;
+                }
+                currentLibraryNames[item.LibraryItemId] = currentName;
+            }
+
+            if (currentName.Length > 0) return currentName;
+        }
+
+        var recordedName = (item.LibraryName ?? string.Empty).Trim();
+        return recordedName.Length > 0 ? recordedName : item.StationName;
     }
 }

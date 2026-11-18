@@ -1,8 +1,8 @@
 define([], function () {
     'use strict';
 
-    window.__radioMetaDashboardControllerInfo_v1328 = {
-        version: '1.3.128',
+    window.__radioMetaDashboardControllerInfo_v1352 = {
+        version: '1.3.152',
         initialized: true,
         sourceMode: 'bundled-source-sections',
         sections: [

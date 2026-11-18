@@ -1,8 +1,8 @@
 define([], function () {
     'use strict';
 
-    window.__radioMetaDashboardControllerInfo_v1328 = {
-        version: '1.3.128',
+    window.__radioMetaDashboardControllerInfo_v1352 = {
+        version: '1.3.152',
         initialized: true,
         sourceMode: 'bundled-source-sections',
         sections: [
@@ -49,6 +49,208 @@ define([], function () {
         var titleCorrectionsSaveInProgress = false;
         var titleCorrectionsLoaded = false;
         var titleCleanupRulesLoaded = false;
+
+        // ---------------------------------------------------------------
+        // Native Emby look (1.3.152). Element lookup, dialogs, confirm and
+        // alert messages, fields and icons all use Emby's own modules when
+        // they are available, and fall back to plain browser equivalents.
+        // ---------------------------------------------------------------
+        var radioMetaEmby = {};
+        var radioMetaOpenDialogs = [];
+        var radioMetaModulesReady = (function () {
+            if (!window.Emby || typeof window.Emby.importModule !== 'function') return Promise.resolve();
+            function load(key, path) {
+                return window.Emby.importModule(path).then(function (module) {
+                    radioMetaEmby[key] = module && module.default ? module.default : module;
+                }).catch(function () { radioMetaEmby[key] = null; });
+            }
+            return Promise.all([
+                load('dialogHelper', './modules/dialoghelper/dialoghelper.js'),
+                load('confirm', './modules/common/dialogs/confirm.js'),
+                load('alert', './modules/common/dialogs/alert.js'),
+                load('mainTabsManager', './modules/maintabsmanager.js'),
+                load('embyInput', './modules/emby-elements/emby-input/emby-input.js'),
+                load('embySelect', './modules/emby-elements/emby-select/emby-select.js'),
+                load('embyToggle', './modules/emby-elements/emby-toggle/emby-toggle.js'),
+                load('embyButton', './modules/emby-elements/emby-button/emby-button.js'),
+                load('iconButton', './modules/emby-elements/emby-button/paper-icon-button-light.js'),
+                load('dialogCloseButton', './modules/emby-elements/emby-dialogclosebutton/emby-dialogclosebutton.js')
+            ]);
+        })();
+
+        // Elements are found in the page and in any open Radio Meta dialog
+        // (Emby places dialogs outside the page).
+        function radioMetaById(id) {
+            var element = view.querySelector('#' + id);
+            if (element) return element;
+            for (var i = 0; i < radioMetaOpenDialogs.length; i++) {
+                element = radioMetaOpenDialogs[i].element.querySelector('#' + id);
+                if (element) return element;
+            }
+            return null;
+        }
+
+        function radioMetaQueryAll(selector) {
+            var found = Array.prototype.slice.call(view.querySelectorAll(selector));
+            radioMetaOpenDialogs.forEach(function (entry) {
+                found = found.concat(Array.prototype.slice.call(entry.element.querySelectorAll(selector)));
+            });
+            return found;
+        }
+
+        // Opens content in an Emby dialog. options: title, content (element),
+        // key (to close it later), returnTo (element to put content back in),
+        // onClose. Returns { element, close }.
+        function openRadioMetaDialog(options) {
+            var helper = radioMetaEmby.dialogHelper;
+            var useEmby = !!(helper && typeof helper.createDialog === 'function' && typeof helper.open === 'function');
+            var dlg = useEmby
+                ? helper.createDialog({ removeOnClose: true, scrollY: false, size: 'small' })
+                : document.createElement('div');
+            var box = dlg;
+            if (!useEmby) {
+                dlg.className = 'radioMetaFallbackDialog';
+                box = document.createElement('div');
+                dlg.appendChild(box);
+            }
+            box.classList.add('formDialog');
+            var header = document.createElement('div');
+            header.className = 'formDialogHeader';
+            var closeButton = document.createElement('button', useEmby ? { is: 'emby-dialogclosebutton' } : undefined);
+            closeButton.type = 'button';
+            if (useEmby) closeButton.setAttribute('is', 'emby-dialogclosebutton');
+            else {
+                closeButton.className = 'paper-icon-button-light';
+                closeButton.innerHTML = '<i class="md-icon">close</i>';
+                closeButton.title = 'Close';
+            }
+            var title = document.createElement('h3');
+            title.className = 'formDialogHeaderTitle';
+            title.textContent = options.title || '';
+            header.appendChild(closeButton);
+            header.appendChild(title);
+            var content = document.createElement('div');
+            content.className = 'formDialogContent';
+            content.style.overflowY = 'auto';
+            var inner = document.createElement('div');
+            inner.className = 'dialogContentInner dialog-content-centered padded-left padded-right';
+            content.appendChild(inner);
+            if (options.content) inner.appendChild(options.content);
+            box.appendChild(header);
+            box.appendChild(content);
+
+            var entry = { element: dlg, key: options.key || '', closed: false, observers: [] };
+            // Status lines in the page are mirrored into the dialog while it is open.
+            Array.prototype.slice.call(inner.querySelectorAll('[data-mirror]')).forEach(function (target) {
+                var source = view.querySelector('#' + target.getAttribute('data-mirror'));
+                if (!source || typeof MutationObserver !== 'function') return;
+                target.textContent = '';
+                var observer = new MutationObserver(function () { target.textContent = source.textContent; });
+                observer.observe(source, { childList: true, characterData: true, subtree: true });
+                entry.observers.push(observer);
+            });
+            dlg.addEventListener('click', onViewClick);
+
+            function cleanUp() {
+                if (entry.closed) return;
+                entry.closed = true;
+                entry.observers.forEach(function (observer) { observer.disconnect(); });
+                radioMetaOpenDialogs = radioMetaOpenDialogs.filter(function (open) { return open !== entry; });
+                if (options.content && options.returnTo) options.returnTo.appendChild(options.content);
+                if (!useEmby && dlg.parentNode) dlg.parentNode.removeChild(dlg);
+                if (typeof options.onClose === 'function') options.onClose();
+            }
+            entry.close = function () {
+                if (entry.closed) return;
+                if (useEmby) { try { helper.close(dlg); } catch (ignore) { cleanUp(); } }
+                else cleanUp();
+            };
+            if (useEmby) dlg.addEventListener('close', cleanUp);
+            else closeButton.addEventListener('click', entry.close);
+            radioMetaOpenDialogs.push(entry);
+            if (useEmby) helper.open(dlg);
+            else document.body.appendChild(dlg);
+            return entry;
+        }
+
+        function closeRadioMetaDialogs(key) {
+            radioMetaOpenDialogs.slice().forEach(function (entry) {
+                if (!key || entry.key === key) entry.close();
+            });
+        }
+
+        // Opens one of the page's own forms (kept in .radioMetaDialogForms) in a dialog.
+        function openRadioMetaFormDialog(formId, title) {
+            var form = view.querySelector('#' + formId) || radioMetaById(formId);
+            if (!form) return null;
+            closeRadioMetaDialogs(formId);
+            var home = view.querySelector('.radioMetaDialogForms');
+            return openRadioMetaDialog({
+                key: formId,
+                title: title || form.getAttribute('data-dialog-title') || '',
+                content: form,
+                returnTo: home
+            });
+        }
+
+        // Emby's confirm dialog; resolves true for OK, false for Cancel.
+        function radioMetaConfirm(text, title) {
+            var confirm = radioMetaEmby.confirm;
+            if (typeof confirm === 'function') {
+                return confirm({ text: text, title: title || 'Radio Meta', confirmText: 'OK' })
+                    .then(function () { return true; }, function () { return false; });
+            }
+            return Promise.resolve(window.confirm(text));
+        }
+
+        function radioMetaAlert(text) {
+            var alert = radioMetaEmby.alert;
+            if (typeof alert === 'function') {
+                alert({ text: String(text || ''), title: 'Radio Meta' }).catch(function () { });
+                return;
+            }
+            window.alert(text);
+        }
+
+        // Emby's ApiClient.ajax decodes the reply only with dataType: 'json';
+        // otherwise it can hand back the raw fetch Response. Decode either way,
+        // so a save never mistakes an undecoded reply for empty data.
+        function radioMetaReadJson(data) {
+            if (data && typeof data.json === 'function') return data.json();
+            if (typeof data === 'string') {
+                try { return JSON.parse(data); } catch (ignore) { return data; }
+            }
+            if (data && typeof data === 'object') {
+                if (data.responseJSON !== undefined) return data.responseJSON;
+                if (typeof data.responseText === 'string') {
+                    try { return JSON.parse(data.responseText); } catch (ignore) { }
+                }
+            }
+            return data;
+        }
+
+        // An Emby text field with a floating label, as on Emby's own pages.
+        function makeRadioMetaField(labelText, type, maxLength, value) {
+            var container = document.createElement('div');
+            container.className = 'inputContainer';
+            var input;
+            try { input = document.createElement('input', { is: 'emby-input' }); }
+            catch (ignore) { input = document.createElement('input'); }
+            input.setAttribute('is', 'emby-input');
+            input.type = type || 'text';
+            if (maxLength) input.maxLength = maxLength;
+            input.setAttribute('label', labelText);
+            input.value = value || '';
+            if (!window.customElements || !window.customElements.get || !window.customElements.get('emby-input')) {
+                var label = document.createElement('label');
+                label.className = 'inputLabel';
+                label.textContent = labelText;
+                container.appendChild(label);
+                input.className = 'emby-input';
+            }
+            container.appendChild(input);
+            return { container: container, input: input };
+        }
 
         function getValue(object, pascalName, camelName) {
             if (!object) {
@@ -146,51 +348,22 @@ define([], function () {
             console.error('Radio Meta history:', error);
         }
 
-        function makeTrashIcon(button) {
-            var ns = 'http://www.w3.org/2000/svg';
-            var svg = document.createElementNS(ns, 'svg');
-            svg.setAttribute('viewBox', '0 0 24 24');
-            svg.setAttribute('aria-hidden', 'true');
-            svg.setAttribute('focusable', 'false');
-            svg.setAttribute('fill', 'none');
-            svg.setAttribute('stroke', 'currentColor');
-            svg.setAttribute('stroke-width', '2');
-            svg.setAttribute('stroke-linecap', 'round');
-            svg.setAttribute('stroke-linejoin', 'round');
-
-            var paths = [
-                'M3 6h18',
-                'M8 6V4h8v2',
-                'M19 6l-1 14H6L5 6',
-                'M10 10v6',
-                'M14 10v6'
-            ];
-            paths.forEach(function (pathData) {
-                var path = document.createElementNS(ns, 'path');
-                path.setAttribute('d', pathData);
-                svg.appendChild(path);
-            });
-            button.appendChild(svg);
+        // Emby's icon buttons (Material icon font), as in Emby's own lists.
+        function makeRadioMetaIconButton(button, iconName) {
+            button.className = String(button.className || '')
+                .replace(/\bemby-button\b|\braised\b|\bbutton-delete\b|\bbutton-submit\b/g, ' ')
+                .replace(/\s+/g, ' ').trim() + ' paper-icon-button-light listItemButton';
+            button.textContent = '';
+            var icon = document.createElement('i');
+            icon.className = 'md-icon';
+            icon.setAttribute('aria-hidden', 'true');
+            icon.textContent = iconName;
+            button.appendChild(icon);
         }
 
-        function makePencilIcon(button) {
-            var ns = 'http://www.w3.org/2000/svg';
-            var svg = document.createElementNS(ns, 'svg');
-            svg.setAttribute('viewBox', '0 0 24 24');
-            svg.setAttribute('aria-hidden', 'true');
-            svg.setAttribute('focusable', 'false');
-            svg.setAttribute('fill', 'none');
-            svg.setAttribute('stroke', 'currentColor');
-            svg.setAttribute('stroke-width', '2');
-            svg.setAttribute('stroke-linecap', 'round');
-            svg.setAttribute('stroke-linejoin', 'round');
-            ['M12 20h9', 'M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z'].forEach(function (pathData) {
-                var path = document.createElementNS(ns, 'path');
-                path.setAttribute('d', pathData);
-                svg.appendChild(path);
-            });
-            button.appendChild(svg);
-        }
+        function makeTrashIcon(button) { makeRadioMetaIconButton(button, 'delete'); }
+
+        function makePencilIcon(button) { makeRadioMetaIconButton(button, 'edit'); }
 
 
         var stationScanInProgress = false;
@@ -286,9 +459,9 @@ define([], function () {
             function withCompletionNote(message) {
                 return completionNote ? message + ' ' + completionNote : message;
             }
-            var button = view.querySelector('#radioStationScanButton');
-            var status = view.querySelector('#radioStationScanStatus');
-            var container = view.querySelector('#radioStationScanResults');
+            var button = radioMetaById('radioStationScanButton');
+            var status = radioMetaById('radioStationScanStatus');
+            var container = radioMetaById('radioStationScanResults');
             if (stationScanInProgress || !button || !status || !container) {
                 reportStationOperationResult(stationOperationData, {
                     stationListRefreshStatus: stationScanInProgress ? 'not-run-busy' : 'not-started'
@@ -298,6 +471,8 @@ define([], function () {
 
             var scrollSnapshot = captureRadioMetaScrollPosition();
             stationScanInProgress = true;
+            // A rescan follows every station change; close its edit dialog.
+            closeRadioMetaDialogs('station-edit');
             status.textContent = withCompletionNote('Scanning configured Station Folder...');
             container.replaceChildren();
 
@@ -394,13 +569,13 @@ define([], function () {
 
                 stations.forEach(function (station) {
                     var row = document.createElement('div');
-                    row.className = 'radio-station-scan-row';
+                    row.className = 'listItem listItem-border radio-station-scan-row';
                     var stationDisplayName = String(getValue(station, 'Name', 'name') || '(unnamed station)');
                     var embyItemId = String(getValue(station, 'EmbyItemId', 'embyItemId') || '').trim();
                     var artworkDataUri = getValue(station, 'ArtworkDataUri', 'artworkDataUri') || '';
                     if (artworkDataUri) {
                         var logo = document.createElement('img');
-                        logo.className = 'radio-station-scan-logo';
+                        logo.className = 'radio-station-scan-logo radioMetaStationLogo';
                         logo.alt = '';
                         logo.loading = 'lazy';
                         logo.src = artworkDataUri;
@@ -420,28 +595,28 @@ define([], function () {
                         }
                     } else {
                         var placeholder = document.createElement('div');
-                        placeholder.className = 'radio-station-scan-logo-placeholder';
+                        placeholder.className = 'radio-station-scan-logo-placeholder radioMetaStationLogoPlaceholder';
                         placeholder.setAttribute('aria-hidden', 'true');
                         placeholder.textContent = '♫';
                         row.appendChild(placeholder);
                     }
                     var content = document.createElement('div');
-                    content.className = 'radio-station-scan-content';
+                    content.className = 'listItemBody three-line radio-station-scan-content';
                     var name = document.createElement('div');
-                    name.className = 'radio-station-scan-name';
+                    name.className = 'listItemBodyText radio-station-scan-name';
                     name.textContent = stationDisplayName;
                     content.appendChild(name);
 
                     var streamStatus = getValue(station, 'StreamStatus', 'streamStatus') || 'Unknown';
                     var artworkStatus = getValue(station, 'ArtworkStatus', 'artworkStatus') || 'Unknown';
                     var meta = document.createElement('div');
-                    meta.className = 'radio-station-scan-meta';
+                    meta.className = 'listItemBodyText listItemBodyText-secondary secondaryText radio-station-scan-meta';
                     meta.textContent = 'Stream: ' + streamStatus + ' · Artwork: ' + artworkStatus;
                     content.appendChild(meta);
 
                     var streamUrl = getValue(station, 'StreamUrl', 'streamUrl') || '';
                     var url = document.createElement('div');
-                    url.className = 'radio-station-scan-url';
+                    url.className = 'listItemBodyText listItemBodyText-secondary secondaryText radio-station-scan-url';
                     url.textContent = streamUrl || '(no stream URL could be read)';
                     content.appendChild(url);
 
@@ -461,28 +636,22 @@ define([], function () {
                         var currentArtworkPath = String(getValue(station, 'ArtworkPath', 'artworkPath') || '');
                         var filePath = String(getValue(station, 'FilePath', 'filePath') || getValue(station, 'Id', 'id') || '');
                         var editForm = document.createElement('div');
-                        editForm.className = 'radio-station-edit-form';
-                        editForm.style.cssText = 'display:flex;flex-direction:column;gap:8px;margin-top:10px;';
-                        var nameLabel = document.createElement('label');
-                        nameLabel.textContent = 'Station name';
-                        var nameInput = document.createElement('input');
-                        nameInput.type = 'text'; nameInput.maxLength = 160; nameInput.className = 'emby-input'; nameInput.value = currentName;
-                        nameLabel.appendChild(nameInput);
-                        var urlLabel = document.createElement('label');
-                        urlLabel.textContent = 'Stream URL';
-                        var urlInput = document.createElement('input');
-                        urlInput.type = 'url'; urlInput.maxLength = 2048; urlInput.className = 'emby-input'; urlInput.value = currentUrl;
-                        urlLabel.appendChild(urlInput);
-                        var artworkLabel = document.createElement('label');
-                        artworkLabel.textContent = 'Station logo URL (optional; leave blank to keep current logo)';
-                        var artworkInput = document.createElement('input');
-                        artworkInput.type = 'url'; artworkInput.maxLength = 2048; artworkInput.className = 'emby-input'; artworkInput.placeholder = 'https://example.com/logo.png';
-                        artworkLabel.appendChild(artworkInput);
+                        editForm.className = 'radioMetaDialogForm radio-station-edit-form';
+                        var nameField = makeRadioMetaField('Station name', 'text', 160, currentName);
+                        var nameLabel = nameField.container;
+                        var nameInput = nameField.input;
+                        var urlField = makeRadioMetaField('Stream address', 'url', 2048, currentUrl);
+                        var urlLabel = urlField.container;
+                        var urlInput = urlField.input;
+                        var artworkField = makeRadioMetaField('New logo address (optional; blank keeps the current logo)', 'url', 2048, '');
+                        var artworkLabel = artworkField.container;
+                        var artworkInput = artworkField.input;
                         var help = document.createElement('div');
-                        help.className = 'radio-path-help';
+                        help.className = 'fieldDescription';
                         help.textContent = 'Saving updates the .strm file. A supplied JPG/PNG logo URL downloads a replacement; leaving it blank keeps the current logo and renames it with the station if needed.';
                         var actions = document.createElement('div');
-                        actions.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;';
+                        actions.className = 'radioMetaDialogButtons';
+                        actions.style.cssText = 'display:flex;gap:.5em;flex-wrap:wrap;';
                         var saveButton = document.createElement('button');
                         saveButton.type = 'button'; saveButton.className = 'emby-button raised button-submit'; saveButton.textContent = 'Save changes';
                         var cancelButton = document.createElement('button');
@@ -491,16 +660,20 @@ define([], function () {
                         deleteButton.type = 'button'; deleteButton.className = 'emby-button raised button-delete'; deleteButton.textContent = 'Delete station';
                         deleteButton.title = 'Remove this station from the Radio Folder while keeping its saved metadata rules and corrections.';
                         actions.appendChild(saveButton); actions.appendChild(cancelButton); actions.appendChild(deleteButton);
+                        var proxyContainer = document.createElement('div');
+                        proxyContainer.className = 'toggleContainer';
                         var proxyLabel = document.createElement('label');
-                        proxyLabel.style.cssText = 'display:inline-flex;align-items:center;gap:4px;margin-left:8px;align-self:center;cursor:pointer;';
-                        var proxyCheckbox = document.createElement('input');
+                        var proxyCheckbox;
+                        try { proxyCheckbox = document.createElement('input', { is: 'emby-toggle' }); }
+                        catch (ignore) { proxyCheckbox = document.createElement('input'); }
+                        proxyCheckbox.setAttribute('is', 'emby-toggle');
                         proxyCheckbox.type = 'checkbox';
                         proxyCheckbox.checked = !!getValue(station, 'UseProxy', 'useProxy');
                         proxyCheckbox.setAttribute('aria-label', 'Use proxy for ' + (currentName || 'station'));
                         var proxyText = document.createElement('span');
-                        proxyText.textContent = 'proxy';
+                        proxyText.textContent = 'Play through the Radio Meta proxy';
                         proxyLabel.appendChild(proxyCheckbox); proxyLabel.appendChild(proxyText);
-                        actions.appendChild(proxyLabel);
+                        proxyContainer.appendChild(proxyLabel);
 
                         // Proxy-enabled stations must be explicitly unproxied before editing.
                         // Keep this lock in the source section so it survives dashboard bundle rebuilds.
@@ -516,7 +689,7 @@ define([], function () {
                                 label.style.cursor = isProxyEnabled ? 'not-allowed' : '';
                             });
                             if (isProxyEnabled) {
-                                help.textContent = 'Editing is disabled while proxy is enabled. Uncheck “proxy” below to disable it. The station list will refresh; reopen Edit to change the station name, stream URL, or logo.';
+                                help.textContent = 'Editing is disabled while proxy is enabled. Turn off “Play through the Radio Meta proxy” to disable it. The station list will refresh; reopen Edit to change the station name, stream URL, or logo.';
                                 help.style.cssText = 'padding:8px;border-left:3px solid var(--theme-primary-color, #888);background:var(--cardBackgroundColor, rgba(128,128,128,0.08));';
                                 proxyLabel.title = 'Proxy is enabled. Uncheck to restore direct playback and then reopen Edit to change station details.';
                             } else {
@@ -556,7 +729,7 @@ define([], function () {
                                       proxyCheckbox.checked = !desired;
                                       proxyCheckbox.disabled = false;
                                       updateProxyEditLock(proxyCheckbox.checked);
-                                      window.alert((data && (data.Error || data.error)) || 'The server did not confirm the proxy change.');
+                                      radioMetaAlert((data && (data.Error || data.error)) || 'The server did not confirm the proxy change.');
                                   restoreRadioMetaScrollPosition(actionScrollSnapshot);
                                   }
                               }).catch(function (error) {
@@ -564,25 +737,31 @@ define([], function () {
                                   proxyCheckbox.checked = !desired;
                                   proxyCheckbox.disabled = false;
                                   updateProxyEditLock(proxyCheckbox.checked);
-                                  window.alert('Could not change proxy setting: ' + (error && error.message ? error.message : String(error)));
+                                  radioMetaAlert('Could not change proxy setting: ' + (error && error.message ? error.message : String(error)));
                                   restoreRadioMetaScrollPosition(actionScrollSnapshot);
                               });
                         });
-                        editForm.appendChild(nameLabel); editForm.appendChild(urlLabel); editForm.appendChild(artworkLabel); editForm.appendChild(help); editForm.appendChild(actions);
-                        content.appendChild(editForm);
+                        editForm.appendChild(nameLabel); editForm.appendChild(urlLabel); editForm.appendChild(artworkLabel); editForm.appendChild(help); editForm.appendChild(proxyContainer); editForm.appendChild(actions);
+                        var editDialog = openRadioMetaDialog({
+                            key: 'station-edit',
+                            title: 'Edit station',
+                            content: editForm,
+                            onClose: function () { editButton.disabled = false; }
+                        });
                         editButton.disabled = true;
                         if (proxyCheckbox.checked) focusRadioMetaWithoutScrolling(proxyCheckbox, false);
                         else focusRadioMetaWithoutScrolling(nameInput, false);
                         restoreRadioMetaScrollPosition(editScrollSnapshot);
                         cancelButton.addEventListener('click', function () {
                             var cancelScrollSnapshot = captureRadioMetaScrollPosition();
-                            editForm.remove(); editButton.disabled = false;
+                            editDialog.close();
                             restoreRadioMetaScrollPosition(cancelScrollSnapshot);
                         });
                         deleteButton.addEventListener('click', function () {
                             var actionScrollSnapshot = captureRadioMetaScrollPosition();
                             var stationName = currentName || 'this station';
-                            if (!window.confirm('Disable ' + stationName + '? This removes its .strm file, matching station artwork, and proxy sidecar from the Radio Folder. Its saved station metadata rules and title corrections will be kept.')) return;
+                            radioMetaConfirm('Disable ' + stationName + '? This removes its .strm file, matching station artwork, and proxy sidecar from the Radio Folder. Its saved station metadata rules and title corrections will be kept.').then(function (confirmed) {
+                            if (!confirmed) return;
                             deleteButton.disabled = true; saveButton.disabled = true; cancelButton.disabled = true;
                             status.textContent = 'Disabling ' + stationName + '...';
                             ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('RadioMeta/Stations/Delete'), data: JSON.stringify({ FilePath: filePath }), contentType: 'application/json', dataType: 'json' })
@@ -599,23 +778,24 @@ define([], function () {
                                         });
                                     } else {
                                         recordStationOperationFailure('Delete station', stationName, 'server-rejected');
-                                        window.alert((data && (data.Error || data.error)) || 'The server did not confirm that the station was disabled.');
+                                        radioMetaAlert((data && (data.Error || data.error)) || 'The server did not confirm that the station was disabled.');
                                         deleteButton.disabled = false; updateProxyEditLock(proxyCheckbox.checked); cancelButton.disabled = false;
                                         restoreRadioMetaScrollPosition(actionScrollSnapshot);
                                     }
                                 })
-                                .catch(function (error) { recordStationOperationFailure('Delete station', stationName, 'request-failed'); window.alert('Station delete failed: ' + (error && error.message ? error.message : String(error))); deleteButton.disabled = false; updateProxyEditLock(proxyCheckbox.checked); cancelButton.disabled = false; restoreRadioMetaScrollPosition(actionScrollSnapshot); });
+                                .catch(function (error) { recordStationOperationFailure('Delete station', stationName, 'request-failed'); radioMetaAlert('Station delete failed: ' + (error && error.message ? error.message : String(error))); deleteButton.disabled = false; updateProxyEditLock(proxyCheckbox.checked); cancelButton.disabled = false; restoreRadioMetaScrollPosition(actionScrollSnapshot); });
+                        });
                         });
                         saveButton.addEventListener('click', function () {
                             var actionScrollSnapshot = captureRadioMetaScrollPosition();
                             if (proxyCheckbox.checked) {
-                                window.alert('Disable proxy for this station first. The station list will refresh; reopen Edit to make changes.');
+                                radioMetaAlert('Disable proxy for this station first. The station list will refresh; reopen Edit to make changes.');
                                 return;
                             }
                             var editedName = nameInput.value.trim();
                             var editedUrl = urlInput.value.trim();
-                            if (!editedName) { nameInput.focus(); window.alert('Station name cannot be blank.'); return; }
-                            if (!editedUrl) { urlInput.focus(); window.alert('Stream URL cannot be blank.'); return; }
+                            if (!editedName) { nameInput.focus(); radioMetaAlert('Station name cannot be blank.'); return; }
+                            if (!editedUrl) { urlInput.focus(); radioMetaAlert('Stream URL cannot be blank.'); return; }
                             saveButton.disabled = true; cancelButton.disabled = true;
                             status.textContent = 'Saving changes to ' + currentName + '...';
                             ApiClient.ajax({
@@ -639,13 +819,13 @@ define([], function () {
                                     });
                                 } else {
                                     recordStationOperationFailure('Edit/rename station', editedName || currentName, 'server-rejected');
-                                    window.alert((data && (data.Error || data.error)) || 'The server did not confirm the station update.');
+                                    radioMetaAlert((data && (data.Error || data.error)) || 'The server did not confirm the station update.');
                                     updateProxyEditLock(proxyCheckbox.checked); cancelButton.disabled = false;
                                     restoreRadioMetaScrollPosition(actionScrollSnapshot);
                                 }
                             }).catch(function (error) {
                                 recordStationOperationFailure('Edit/rename station', editedName || currentName, 'request-failed');
-                                window.alert('Station edit failed: ' + (error && error.message ? error.message : String(error)));
+                                radioMetaAlert('Station edit failed: ' + (error && error.message ? error.message : String(error)));
                                 updateProxyEditLock(proxyCheckbox.checked); cancelButton.disabled = false;
                                 restoreRadioMetaScrollPosition(actionScrollSnapshot);
                             });
@@ -670,7 +850,7 @@ define([], function () {
         }
 
         function updateStationFolderVisibilityButton() {
-            var button = view.querySelector('#radioStationScanButton');
+            var button = radioMetaById('radioStationScanButton');
             if (!button) return;
             var label = button.querySelector('span');
             if (label) label.textContent = stationFolderPanelVisible ? 'Hide Folder' : 'Show Folder';
@@ -678,7 +858,7 @@ define([], function () {
         }
 
         function toggleStationFolderVisibility() {
-            var panel = view.querySelector('#radioStationFolderPanel');
+            var panel = radioMetaById('radioStationFolderPanel');
             if (!panel) return;
 
             if (stationFolderPanelVisible) {
@@ -698,7 +878,7 @@ define([], function () {
 
         function updateHistoryVisibilityButton() {
             // The left-hand history button is the single show/hide control.
-            var button = view.querySelector('#radioHistoryScan');
+            var button = radioMetaById('radioHistoryScan');
             if (!button) return;
             var label = button.querySelector('span');
             if (label) label.textContent = historyPanelVisible ? 'Hide History' : 'Show History';
@@ -706,7 +886,7 @@ define([], function () {
         }
 
         function toggleHistoryVisibility() {
-            var panel = view.querySelector('#radioHistoryPanel');
+            var panel = radioMetaById('radioHistoryPanel');
             if (!panel) return;
 
             if (historyPanelVisible) {
@@ -726,8 +906,8 @@ define([], function () {
 
         function loadHistory() {
             if (!historyPanelVisible) return;
-            var status = view.querySelector('#radioStatus');
-            var container = view.querySelector('#radioHistory');
+            var status = radioMetaById('radioStatus');
+            var container = radioMetaById('radioHistory');
 
             if (!status || !container) {
                 return;
@@ -758,7 +938,7 @@ define([], function () {
                     historyItems = items;
                     var configuredLimit = Number(getValue(data, 'Limit', 'limit')) || 200;
                     container.replaceChildren();
-                    var clearButton = view.querySelector('#radioHistoryClear');
+                    var clearButton = radioMetaById('radioHistoryClear');
                     if (clearButton) {
                         clearButton.disabled = !items.length || historyActionInProgress;
                     }
@@ -769,25 +949,9 @@ define([], function () {
                         return;
                     }
 
-                    var table = document.createElement('table');
-                    table.className = 'radio-history-table';
-                    table.setAttribute('aria-label', 'Radio history');
-
-                    var thead = document.createElement('thead');
-                    var headerRow = document.createElement('tr');
-                    ['#', 'Station', 'Song Title', 'Artist', 'Date/Time', 'Actions'].forEach(function (label) {
-                        var th = document.createElement('th');
-                        th.scope = 'col';
-                        th.textContent = label;
-                        headerRow.appendChild(th);
-                    });
-                    thead.appendChild(headerRow);
-                    table.appendChild(thead);
-
-                    var tbody = document.createElement('tbody');
-                    items.forEach(function (item, itemIndex) {
-                        var row = document.createElement('tr');
-                        row.className = 'radio-history-row' + (itemIndex % 2 === 1 ? ' radio-history-row-alternate' : '');
+                    items.forEach(function (item) {
+                        var row = document.createElement('div');
+                        row.className = 'listItem listItem-border radio-history-row';
 
                         var artist = getValue(item, 'Artist', 'artist');
                         var songTitle = getValue(item, 'SongTitle', 'songTitle');
@@ -797,40 +961,52 @@ define([], function () {
                         row.setAttribute('data-history-row-id', id);
                         row.setAttribute('data-current-title', songTitle || '');
 
-                        addText(row, 'radio-history-number', String(itemIndex + 1), 'td');
-                        addText(row, 'radio-history-station', stationName || '—', 'td');
-                        addText(row, 'radio-history-song', songTitle || (artist ? 'Unknown title' : 'Unknown track'), 'td');
-                        addText(row, 'radio-history-artist', artist || '—', 'td');
-                        addText(row, 'radio-history-played-at', formatPlayedAt(playedAt) || '—', 'td');
+                        // Song and artist on the first line; station and time on the
+                        // second. The station's current Emby library name is shown;
+                        // StationName (the .strm file name) is shown on hover when it differs.
+                        var body = document.createElement('div');
+                        body.className = 'listItemBody two-line';
+                        var firstLine = document.createElement('div');
+                        firstLine.className = 'listItemBodyText';
+                        addText(firstLine, 'radio-history-song', songTitle || (artist ? 'Unknown title' : 'Unknown track'), 'span');
+                        firstLine.appendChild(document.createTextNode(' — '));
+                        addText(firstLine, 'radio-history-artist', artist || '—', 'span');
+                        body.appendChild(firstLine);
+                        var secondLine = document.createElement('div');
+                        secondLine.className = 'listItemBodyText listItemBodyText-secondary secondaryText';
+                        var displayStationName = getValue(item, 'DisplayStationName', 'displayStationName') || stationName;
+                        var stationCell = addText(secondLine, 'radio-history-station', displayStationName || '—', 'span');
+                        if (stationName && displayStationName && String(displayStationName) !== String(stationName)) {
+                            stationCell.setAttribute('title', 'File name: ' + stationName);
+                        }
+                        secondLine.appendChild(document.createTextNode(' · '));
+                        addText(secondLine, 'radio-history-played-at', formatPlayedAt(playedAt) || '—', 'span');
+                        body.appendChild(secondLine);
+                        row.appendChild(body);
 
-                        var actions = document.createElement('td');
-                        actions.className = 'radio-history-actions';
                         if (id) {
                             var editButton = document.createElement('button');
                             editButton.type = 'button';
-                            editButton.className = 'emby-button raised radio-history-edit';
+                            editButton.className = 'radio-history-edit';
                             editButton.setAttribute('data-history-edit-id', id);
                             editButton.setAttribute('aria-label', 'Edit title for ' + (songTitle || 'Unknown track'));
                             editButton.setAttribute('title', 'Edit title');
                             editButton.disabled = historyActionInProgress;
                             makePencilIcon(editButton);
-                            actions.appendChild(editButton);
+                            row.appendChild(editButton);
 
                             var deleteButton = document.createElement('button');
                             deleteButton.type = 'button';
-                            deleteButton.className = 'emby-button raised button-delete radio-history-delete';
+                            deleteButton.className = 'radio-history-delete';
                             deleteButton.setAttribute('data-history-delete-id', id);
                             deleteButton.setAttribute('aria-label', 'Delete history entry ' + (songTitle || 'Unknown track'));
                             deleteButton.setAttribute('title', 'Delete entry');
                             deleteButton.disabled = historyActionInProgress;
                             makeTrashIcon(deleteButton);
-                            actions.appendChild(deleteButton);
+                            row.appendChild(deleteButton);
                         }
-                        row.appendChild(actions);
-                        tbody.appendChild(row);
+                        container.appendChild(row);
                     });
-                    table.appendChild(tbody);
-                    container.appendChild(table);
 
                     status.textContent = items.length >= configuredLimit
                         ? 'Showing the ' + configuredLimit + ' most recent played items, newest first.'
@@ -856,7 +1032,7 @@ define([], function () {
         }
 
         function findHistoryEditorRow(id) {
-            return Array.from(view.querySelectorAll('tr[data-history-editor-for]')).find(function (row) {
+            return radioMetaQueryAll('[data-history-editor-for]').find(function (row) {
                 return row.getAttribute('data-history-editor-for') === String(id || '');
             }) || null;
         }
@@ -971,7 +1147,7 @@ define([], function () {
             var scrollSnapshot = captureRadioMetaScrollPosition();
             var targetId = id || activeHistoryEditId;
             var editorRow = findHistoryEditorRow(targetId);
-            if (editorRow && editorRow.parentNode) editorRow.parentNode.removeChild(editorRow);
+            if (editorRow) closeRadioMetaDialogs('history-edit');
             if (!id || activeHistoryEditId === id) activeHistoryEditId = '';
             restoreRadioMetaScrollPosition(scrollSnapshot);
         }
@@ -986,7 +1162,7 @@ define([], function () {
             if (activeHistoryEditId) closeHistoryEditor(activeHistoryEditId);
 
             var item = findHistoryItem(id);
-            var row = Array.from(view.querySelectorAll('tr[data-history-row-id]')).find(function (candidate) {
+            var row = Array.from(view.querySelectorAll('[data-history-row-id]')).find(function (candidate) {
                 return candidate.getAttribute('data-history-row-id') === String(id);
             });
             if (!item || !row || !row.parentNode) return;
@@ -995,14 +1171,12 @@ define([], function () {
             var currentArtist = String(getValue(item, 'Artist', 'artist') || '');
             var originalTitle = String(getValue(item, 'OriginalSongTitle', 'originalSongTitle') || currentTitle);
             if (!originalTitle) originalTitle = currentTitle;
-            var editorRow = document.createElement('tr');
-            editorRow.className = 'radio-history-edit-row';
+            var editorRow = document.createElement('div');
+            editorRow.className = 'radioMetaDialogForm radio-history-edit-row';
             editorRow.setAttribute('data-history-editor-for', id);
             editorRow.setAttribute('data-original-title', originalTitle);
             editorRow.setAttribute('data-current-title', currentTitle);
             editorRow.setAttribute('data-current-artist', currentArtist);
-            var cell = document.createElement('td');
-            cell.colSpan = 6;
             var editor = document.createElement('div');
             editor.className = 'radio-history-inline-editor';
 
@@ -1012,15 +1186,10 @@ define([], function () {
             artistField.className = 'radio-history-edit-field';
             var artistFound = addText(artistField, 'radio-history-edit-found-value', 'Artist found: ' + (currentArtist || '(empty)'), 'div');
             artistFound.style.cssText = 'font-size:0.85em;opacity:0.75;overflow-wrap:anywhere;margin-bottom:2px;';
-            var artistLabel = document.createElement('label');
-            artistLabel.textContent = 'Corrected artist';
-            var artistInput = document.createElement('input');
-            artistInput.type = 'text';
-            artistInput.className = 'emby-input';
-            artistInput.maxLength = 300;
-            artistInput.value = currentArtist;
+            var artistFieldParts = makeRadioMetaField('Corrected artist', 'text', 300, currentArtist);
+            var artistLabel = artistFieldParts.container;
+            var artistInput = artistFieldParts.input;
             artistInput.setAttribute('data-history-edit-artist', 'true');
-            artistLabel.appendChild(artistInput);
             artistField.appendChild(artistLabel);
             fields.appendChild(artistField);
 
@@ -1028,22 +1197,17 @@ define([], function () {
             correctedField.className = 'radio-history-edit-field';
             var titleFound = addText(correctedField, 'radio-history-edit-found-value', 'Title found: ' + originalTitle, 'div');
             titleFound.style.cssText = 'font-size:0.85em;opacity:0.75;overflow-wrap:anywhere;margin-bottom:2px;';
-            var correctedLabel = document.createElement('label');
-            correctedLabel.textContent = 'Corrected song title';
-            var correctedInput = document.createElement('input');
-            correctedInput.type = 'text';
-            correctedInput.className = 'emby-input';
-            correctedInput.maxLength = 300;
-            correctedInput.value = currentTitle;
+            var correctedFieldParts = makeRadioMetaField('Corrected song title', 'text', 300, currentTitle);
+            var correctedLabel = correctedFieldParts.container;
+            var correctedInput = correctedFieldParts.input;
             correctedInput.setAttribute('data-history-edit-corrected', 'true');
-            correctedLabel.appendChild(correctedInput);
             correctedField.appendChild(correctedLabel);
             fields.appendChild(correctedField);
             editor.appendChild(fields);
 
             addText(editor, '', 'Apply correction to:', 'strong');
             var scope = document.createElement('div');
-            scope.className = 'radio-history-edit-scope';
+            scope.className = 'radio-history-edit-scope radioMetaEditScope';
             [
                 { value: 'SongOnly', label: 'This song only', checked: true },
                 { value: 'Station', label: 'Entire station', checked: false }
@@ -1063,18 +1227,12 @@ define([], function () {
 
             var preserveField = document.createElement('div');
             preserveField.className = 'radio-history-edit-preserve';
-            var preserveLabel = document.createElement('label');
-            preserveLabel.textContent = 'Additional labels to preserve (for entire station)';
-            var preserveInput = document.createElement('input');
-            preserveInput.type = 'text';
-            preserveInput.className = 'emby-input';
-            preserveInput.maxLength = 500;
-            preserveInput.placeholder = 'e.g. Live, Radio Edit, Remastered';
+            var preserveFieldParts = makeRadioMetaField('Extra labels to keep (Entire station only)', 'text', 500, getPreserveLabelsForStation(String(getValue(item, 'StationName', 'stationName') || '')));
+            var preserveLabel = preserveFieldParts.container;
+            var preserveInput = preserveFieldParts.input;
             preserveInput.setAttribute('data-history-edit-preserve', 'true');
-            preserveInput.value = getPreserveLabelsForStation(String(getValue(item, 'StationName', 'stationName') || ''));
-            preserveLabel.appendChild(preserveInput);
             preserveField.appendChild(preserveLabel);
-            addText(preserveField, 'radio-history-edit-preserve-help', 'Common labels are already preserved. Add extra labels separated by commas or semicolons. Used only for Entire station.', 'div');
+            addText(preserveField, 'fieldDescription radio-history-edit-preserve-help', 'Common labels are already preserved. Add extra labels separated by commas or semicolons. Used only for Entire station.', 'div');
             editor.appendChild(preserveField);
 
             var preview = document.createElement('div');
@@ -1084,7 +1242,8 @@ define([], function () {
             editor.appendChild(preview);
 
             var buttons = document.createElement('div');
-            buttons.className = 'radio-history-edit-actions';
+            buttons.className = 'radio-history-edit-actions radioMetaDialogButtons';
+            buttons.style.cssText = 'display:flex;gap:.5em;flex-wrap:wrap;';
             var cancel = document.createElement('button');
             cancel.type = 'button';
             cancel.className = 'emby-button raised radio-history-edit-cancel';
@@ -1098,10 +1257,14 @@ define([], function () {
             buttons.appendChild(cancel);
             buttons.appendChild(save);
             editor.appendChild(buttons);
-            cell.appendChild(editor);
-            editorRow.appendChild(cell);
-            row.parentNode.insertBefore(editorRow, row.nextSibling);
+            editorRow.appendChild(editor);
             activeHistoryEditId = String(id);
+            openRadioMetaDialog({
+                key: 'history-edit',
+                title: 'Edit title',
+                content: editorRow,
+                onClose: function () { if (activeHistoryEditId === String(id)) activeHistoryEditId = ''; }
+            });
             artistInput.addEventListener('input', function () { updateHistoryEditPreview(editorRow); });
             correctedInput.addEventListener('input', function () { updateHistoryEditPreview(editorRow); });
             preserveInput.addEventListener('input', function () { updateHistoryEditPreview(editorRow); });
@@ -1119,7 +1282,7 @@ define([], function () {
             var correctedInput = editorRow.querySelector('[data-history-edit-corrected]');
             var scopeInput = editorRow.querySelector('input[name="radioHistoryEditScope"]:checked');
             var preserveInput = editorRow.querySelector('[data-history-edit-preserve]');
-            var status = view.querySelector('#radioStatus');
+            var status = radioMetaById('radioStatus');
             var correctedArtist = artistInput ? artistInput.value.trim() : '';
             var correctedTitle = correctedInput ? correctedInput.value.trim() : '';
             var preserveLabels = preserveInput ? preserveInput.value.trim() : '';
@@ -1168,18 +1331,21 @@ define([], function () {
                 type: 'POST',
                 url: ApiClient.getUrl('RadioMeta/History/Edit'),
                 data: JSON.stringify({ Id: id, CorrectedArtist: scope === 'Station' ? '' : correctedArtist, CorrectedTitle: correctedTitle, Scope: scope, PreserveLabels: preserveLabels }),
-                contentType: 'application/json'
-            }).then(function (data) {
+                contentType: 'application/json',
+                dataType: 'json'
+            }).then(radioMetaReadJson).then(function (data) {
                 var error = getValue(data, 'Error', 'error');
                 if (error) throw new Error(error);
 
                 item.SongTitle = correctedTitle;
                 if (scope !== 'Station' && correctedArtist) item.Artist = correctedArtist;
-                var historyRow = Array.from(view.querySelectorAll('tr[data-history-row-id]')).find(function (row) {
+                var historyRow = Array.from(view.querySelectorAll('[data-history-row-id]')).find(function (row) {
                     return row.getAttribute('data-history-row-id') === String(id);
                 });
-                if (historyRow && historyRow.children[2]) historyRow.children[2].textContent = correctedTitle;
-                if (historyRow && historyRow.children[3]) historyRow.children[3].textContent = item.Artist || '—';
+                var songCell = historyRow && historyRow.querySelector('.radio-history-song');
+                var artistCell = historyRow && historyRow.querySelector('.radio-history-artist');
+                if (songCell) songCell.textContent = correctedTitle;
+                if (artistCell) artistCell.textContent = item.Artist || '—';
                 closeHistoryEditor(String(id));
                 if (status) status.textContent = getValue(data, 'Message', 'message') || 'Artist/title correction saved.';
                 if (scope === 'Station') {
@@ -1224,7 +1390,7 @@ define([], function () {
         }
 
         function renderStationModeRules() {
-            var container = view.querySelector('#radioStationModeRules');
+            var container = radioMetaById('radioStationModeRules');
             if (!container) {
                 return;
             }
@@ -1235,7 +1401,7 @@ define([], function () {
             });
 
             if (!rules.length) {
-                addText(container, 'radio-ignore-empty',
+                addText(container, 'fieldDescription radio-ignore-empty',
                     'No station/device rules saved. Unmatched playback uses Automatic mode with no metadata delay.');
                 return;
             }
@@ -1246,12 +1412,11 @@ define([], function () {
                 var delaySeconds = getStationModeDelaySeconds(rule);
                 var targetDevice = getStationModeTargetDevice(rule);
                 var row = document.createElement('div');
-                row.className = 'radio-station-mode-row';
+                row.className = 'listItem listItem-border radio-station-mode-row';
 
                 var details = document.createElement('div');
-                details.className = 'radio-station-mode-details';
-                addText(details, 'radio-station-mode-name', station, 'strong');
-                addText(details, 'radio-station-mode-scope', 'Station / Device: ' + station);
+                details.className = 'listItemBody two-line radio-station-mode-details';
+                addText(details, 'listItemBodyText radio-station-mode-name', station);
                 var modeDescription = mode === 'StationOnly'
                     ? 'Disable metadata — no track metadata lookups are performed.'
                     : mode === 'StationDelay'
@@ -1269,13 +1434,24 @@ define([], function () {
                 var legacyTargetDescription = targetDevice
                     ? ' Existing station rule is limited to ' + targetDevice + '.'
                     : '';
-                addText(details, 'radio-station-mode-description', modeDescription + ' ' + delayDescription + legacyTargetDescription);
+                addText(details, 'listItemBodyText listItemBodyText-secondary secondaryText radio-station-mode-description', modeDescription + ' ' + delayDescription + legacyTargetDescription);
                 row.appendChild(details);
+
+                var edit = document.createElement('button');
+                edit.type = 'button';
+                edit.className = 'radio-station-mode-edit';
+                edit.setAttribute('data-station-mode-edit', station);
+                edit.setAttribute('aria-label', 'Edit setting for ' + station);
+                edit.title = 'Edit';
+                edit.disabled = stationModeSaveInProgress;
+                makePencilIcon(edit);
+                row.appendChild(edit);
 
                 var remove = document.createElement('button');
                 remove.type = 'button';
-                remove.className = 'emby-button raised radio-station-mode-remove';
-                remove.textContent = 'Remove rule';
+                remove.className = 'radio-station-mode-remove';
+                makeTrashIcon(remove);
+                remove.title = 'Remove';
                 remove.setAttribute('data-station-mode-remove', station);
                 remove.setAttribute('aria-label', 'Remove metadata mode rule for ' + station);
                 remove.disabled = stationModeSaveInProgress;
@@ -1285,7 +1461,7 @@ define([], function () {
         }
 
         function loadStationModes() {
-            var status = view.querySelector('#radioStationModeStatus');
+            var status = radioMetaById('radioStationModeStatus');
             if (!status || stationModeRequestInProgress) {
                 return;
             }
@@ -1317,9 +1493,26 @@ define([], function () {
                 });
         }
 
+        // Opens the station/device setting dialog, filled in for an existing
+        // setting when a name is given.
+        function openStationModeDialog(stationName) {
+            var input = radioMetaById('radioStationModeName');
+            var modeSelect = radioMetaById('radioStationModeValue');
+            var delaySelect = radioMetaById('radioStationModeDelay');
+            var name = String(stationName || '');
+            var existing = name ? stationModeRules.find(function (rule) {
+                return getModeStation(rule).toLowerCase() === name.toLowerCase();
+            }) : null;
+            if (input) input.value = existing ? getModeStation(existing) : '';
+            if (modeSelect) modeSelect.value = existing ? getStationMode(existing) : 'Automatic';
+            if (delaySelect) delaySelect.value = existing ? String(getStationModeDelaySeconds(existing)) : '0';
+            openRadioMetaFormDialog('radioStationModeForm', existing ? 'Edit setting' : 'Station or device setting');
+            if (input) focusRadioMetaWithoutScrolling(input, false);
+        }
+
         function saveStationModeRules(nextRules, station, mode, delaySeconds, targetDevice, successMessage, clearStationInput) {
-            var status = view.querySelector('#radioStationModeStatus');
-            var addButton = view.querySelector('#radioStationModeAdd');
+            var status = radioMetaById('radioStationModeStatus');
+            var addButton = radioMetaById('radioStationModeAdd');
             if (!status || stationModeSaveInProgress) {
                 return;
             }
@@ -1337,8 +1530,9 @@ define([], function () {
                 type: 'POST',
                 url: ApiClient.getUrl('RadioMeta/StationModes'),
                 data: JSON.stringify({ Rules: nextRules }),
-                contentType: 'application/json'
-            }).then(function (data) {
+                contentType: 'application/json',
+                dataType: 'json'
+            }).then(radioMetaReadJson).then(function (data) {
                 var error = getValue(data, 'Error', 'error');
                 if (error) {
                     stationModeRules = previousRules;
@@ -1348,6 +1542,7 @@ define([], function () {
 
                 stationModeRules = getValue(data, 'Rules', 'rules') || nextRules;
                 renderStationModeRules();
+                closeRadioMetaDialogs('radioStationModeForm');
                 var savedMessage = successMessage || (mode === 'StationOnly'
                     ? 'Metadata disabled for ' + station + '. Track metadata lookups are skipped.'
                     : mode === 'StationDelay'
@@ -1362,9 +1557,9 @@ define([], function () {
                             ? ' Metadata delay: ' + delaySeconds + ' second(s). The identifier is matched against station titles and Emby device names.'
                             : ' Metadata delay is off.');
                 if (clearStationInput) {
-                    var input = view.querySelector('#radioStationModeName');
-                    var modeSelect = view.querySelector('#radioStationModeValue');
-                    var delaySelect = view.querySelector('#radioStationModeDelay');
+                    var input = radioMetaById('radioStationModeName');
+                    var modeSelect = radioMetaById('radioStationModeValue');
+                    var delaySelect = radioMetaById('radioStationModeDelay');
                     if (input) {
                         input.value = '';
                     }
@@ -1387,10 +1582,10 @@ define([], function () {
         }
 
         function addStationModeRule() {
-            var input = view.querySelector('#radioStationModeName');
-            var modeSelect = view.querySelector('#radioStationModeValue');
-            var delaySelect = view.querySelector('#radioStationModeDelay');
-            var status = view.querySelector('#radioStationModeStatus');
+            var input = radioMetaById('radioStationModeName');
+            var modeSelect = radioMetaById('radioStationModeValue');
+            var delaySelect = radioMetaById('radioStationModeDelay');
+            var status = radioMetaById('radioStationModeStatus');
             if (!input || !modeSelect || !delaySelect || !status) {
                 return;
             }
@@ -1447,8 +1642,20 @@ define([], function () {
             if (nextRules.length === stationModeRules.length) {
                 return;
             }
-            saveStationModeRules(nextRules, normalizedStation, 'Automatic', 0, '',
-                'Saved rule removed. Matching playback uses Automatic mode with no metadata delay unless another rule applies.', false);
+            var removed = stationModeRules.find(function (rule) {
+                return getModeStation(rule).toLowerCase() === normalizedStation.toLowerCase();
+            });
+            var modeLabels = { Automatic: 'Automatic', StationDelay: 'Station delay', StationOnly: 'Off (station name only)', Carplay: 'CarPlay' };
+            var delay = removed ? getStationModeDelaySeconds(removed) : 0;
+            var summary = removed
+                ? (modeLabels[getStationMode(removed)] || getStationMode(removed)) + (delay > 0 ? ', ' + delay + ' second delay' : ', no delay')
+                : '';
+            radioMetaConfirm('Remove the setting for "' + normalizedStation + '"' + (summary ? ' (' + summary + ')' : '') + '? ' +
+                'Playback there goes back to Automatic unless another setting applies.', 'Remove setting').then(function (confirmed) {
+                if (!confirmed) return;
+                saveStationModeRules(nextRules, normalizedStation, 'Automatic', 0, '',
+                    'Saved rule removed. Matching playback uses Automatic mode with no metadata delay unless another rule applies.', false);
+            });
         }
 
         function getRulePhrase(rule) {
@@ -1460,7 +1667,7 @@ define([], function () {
         }
 
         function renderIgnoreRules() {
-            var container = view.querySelector('#radioIgnoreRules');
+            var container = radioMetaById('radioIgnoreRules');
             if (!container) {
                 return;
             }
@@ -1468,7 +1675,7 @@ define([], function () {
             container.replaceChildren();
 
             if (!ignoreRules.length) {
-                addText(container, 'radio-ignore-empty', 'No ignored phrases configured.');
+                addText(container, 'fieldDescription radio-ignore-empty', 'No ignored phrases configured.');
                 return;
             }
 
@@ -1476,22 +1683,23 @@ define([], function () {
                 var phrase = getRulePhrase(rule);
                 var station = getRuleStation(rule);
                 var row = document.createElement('div');
-                row.className = 'radio-ignore-rule';
+                row.className = 'listItem listItem-border radio-ignore-rule';
 
                 var text = document.createElement('div');
-                text.className = 'radio-ignore-rule-text';
-                addText(text, 'radio-ignore-rule-phrase', phrase, 'strong');
+                text.className = 'listItemBody two-line radio-ignore-rule-text';
+                addText(text, 'listItemBodyText radio-ignore-rule-phrase', phrase);
                 addText(
                     text,
-                    'radio-ignore-rule-scope',
+                    'listItemBodyText listItemBodyText-secondary secondaryText radio-ignore-rule-scope',
                     station ? 'Station: ' + station : 'Applies to all stations'
                 );
                 row.appendChild(text);
 
                 var remove = document.createElement('button');
                 remove.type = 'button';
-                remove.className = 'emby-button raised radio-ignore-remove';
-                remove.textContent = 'Remove';
+                remove.className = 'radio-ignore-remove';
+                makeTrashIcon(remove);
+                remove.title = 'Remove';
                 remove.setAttribute('data-ignore-index', String(index));
                 remove.setAttribute('aria-label', 'Remove ignore phrase ' + phrase);
                 row.appendChild(remove);
@@ -1500,7 +1708,7 @@ define([], function () {
         }
 
         function loadIgnorePhrases() {
-            var status = view.querySelector('#radioIgnoreStatus');
+            var status = radioMetaById('radioIgnoreStatus');
             if (!status || ignoreRequestInProgress) {
                 return;
             }
@@ -1533,8 +1741,8 @@ define([], function () {
         }
 
         function saveIgnoreRules(nextRules, successMessage, clearInputs) {
-            var status = view.querySelector('#radioIgnoreStatus');
-            var addButton = view.querySelector('#radioIgnoreAdd');
+            var status = radioMetaById('radioIgnoreStatus');
+            var addButton = radioMetaById('radioIgnoreAdd');
             if (!status || ignoreSaveInProgress) {
                 return;
             }
@@ -1552,8 +1760,9 @@ define([], function () {
                 type: 'POST',
                 url: ApiClient.getUrl('RadioMeta/IgnorePhrases'),
                 data: JSON.stringify({ Rules: nextRules }),
-                contentType: 'application/json'
-            }).then(function (data) {
+                contentType: 'application/json',
+                dataType: 'json'
+            }).then(radioMetaReadJson).then(function (data) {
                 var error = getValue(data, 'Error', 'error');
                 if (error) {
                     status.textContent = error;
@@ -1562,12 +1771,13 @@ define([], function () {
 
                 ignoreRules = getValue(data, 'Rules', 'rules') || nextRules;
                 renderIgnoreRules();
+                closeRadioMetaDialogs('radioIgnoreForm');
                 status.textContent = successMessage ||
                     getValue(data, 'Message', 'message') || 'Ignore phrase settings saved.';
 
                 if (clearInputs) {
-                    var phraseInput = view.querySelector('#radioIgnorePhrase');
-                    var stationInput = view.querySelector('#radioIgnoreStation');
+                    var phraseInput = radioMetaById('radioIgnorePhrase');
+                    var stationInput = radioMetaById('radioIgnoreStation');
                     if (phraseInput) {
                         phraseInput.value = '';
                     }
@@ -1591,9 +1801,9 @@ define([], function () {
         }
 
         function addIgnorePhrase() {
-            var phraseInput = view.querySelector('#radioIgnorePhrase');
-            var stationInput = view.querySelector('#radioIgnoreStation');
-            var status = view.querySelector('#radioIgnoreStatus');
+            var phraseInput = radioMetaById('radioIgnorePhrase');
+            var stationInput = radioMetaById('radioIgnoreStation');
+            var status = radioMetaById('radioIgnoreStatus');
             if (!phraseInput || !stationInput || !status) {
                 return;
             }
@@ -1648,7 +1858,7 @@ define([], function () {
         }
 
         function updateSavedTitleFixesStatus(message) {
-            var status = view.querySelector('#radioTitleFixesStatus');
+            var status = radioMetaById('radioTitleFixesStatus');
             if (!status) return;
             if (message) {
                 status.textContent = message;
@@ -1668,7 +1878,7 @@ define([], function () {
         }
 
         function renderSavedTitleFixes() {
-            var container = view.querySelector('#radioTitleFixes');
+            var container = radioMetaById('radioTitleFixes');
             if (!container) return;
             container.replaceChildren();
 
@@ -1678,18 +1888,19 @@ define([], function () {
 
             titleCorrections.forEach(function (correction, index) {
                 var row = document.createElement('div');
-                row.className = 'radio-title-correction';
+                row.className = 'listItem listItem-border radio-title-correction';
                 var details = document.createElement('div');
-                details.className = 'radio-title-correction-text';
-                addText(details, 'radio-title-cleanup-rule-name', 'This song only · ' + (getValue(correction, 'StationName', 'stationName') || 'Unknown station'), 'strong');
-                addText(details, 'radio-title-correction-scope',
+                details.className = 'listItemBody two-line radio-title-correction-text';
+                addText(details, 'listItemBodyText radio-title-cleanup-rule-name', 'This song only · ' + (getValue(correction, 'StationName', 'stationName') || 'Unknown station'));
+                addText(details, 'listItemBodyText listItemBodyText-secondary secondaryText radio-title-correction-scope',
                     String(getValue(correction, 'OriginalTitle', 'originalTitle') || '') + '  →  ' +
                     String(getValue(correction, 'CorrectedTitle', 'correctedTitle') || ''));
                 row.appendChild(details);
                 var remove = document.createElement('button');
                 remove.type = 'button';
-                remove.className = 'emby-button raised radio-title-correction-remove';
-                remove.textContent = 'Remove';
+                remove.className = 'radio-title-correction-remove';
+                makeTrashIcon(remove);
+                remove.title = 'Remove';
                 remove.setAttribute('data-title-correction-index', String(index));
                 remove.setAttribute('aria-label', 'Remove exact title correction ' + (index + 1));
                 row.appendChild(remove);
@@ -1709,18 +1920,19 @@ define([], function () {
                             ? 'Remove trailing (parenthetical) suffix'
                             : 'Remove trailing 4-character bracket code';
                 var row = document.createElement('div');
-                row.className = 'radio-title-cleanup-rule';
+                row.className = 'listItem listItem-border radio-title-cleanup-rule';
                 var details = document.createElement('div');
-                details.className = 'radio-title-cleanup-rule-text';
-                addText(details, 'radio-title-cleanup-rule-name', (station || 'All stations') + ' · ' + ruleLabel, 'strong');
+                details.className = 'listItemBody two-line radio-title-cleanup-rule-text';
+                addText(details, 'listItemBodyText radio-title-cleanup-rule-name', (station || 'All stations') + ' · ' + ruleLabel);
                 var detailText = [];
                 if (preserve && type !== 'ExactSuffix') detailText.push('Additional labels to preserve: ' + preserve);
-                addText(details, 'radio-title-cleanup-rule-scope', detailText.join(' · '));
+                addText(details, 'listItemBodyText listItemBodyText-secondary secondaryText radio-title-cleanup-rule-scope', detailText.join(' · '));
                 row.appendChild(details);
                 var remove = document.createElement('button');
                 remove.type = 'button';
-                remove.className = 'emby-button raised radio-title-cleanup-remove';
-                remove.textContent = 'Remove';
+                remove.className = 'radio-title-cleanup-remove';
+                makeTrashIcon(remove);
+                remove.title = 'Remove';
                 remove.setAttribute('data-title-cleanup-index', String(index));
                 remove.setAttribute('aria-label', 'Remove saved title cleanup rule ' + (index + 1));
                 row.appendChild(remove);
@@ -1749,7 +1961,7 @@ define([], function () {
         }
 
         function saveTitleCorrections(nextCorrections) {
-            var status = view.querySelector('#radioTitleFixesStatus');
+            var status = radioMetaById('radioTitleFixesStatus');
             if (!status || titleCorrectionsSaveInProgress) return;
             var previous = titleCorrections;
             titleCorrectionsSaveInProgress = true;
@@ -1759,8 +1971,9 @@ define([], function () {
                 type: 'POST',
                 url: ApiClient.getUrl('RadioMeta/TitleCorrections'),
                 data: JSON.stringify({ Corrections: nextCorrections }),
-                contentType: 'application/json'
-            }).then(function (data) {
+                contentType: 'application/json',
+                dataType: 'json'
+            }).then(radioMetaReadJson).then(function (data) {
                 var error = getValue(data, 'Error', 'error');
                 if (error) throw new Error(error);
                 titleCorrections = getValue(data, 'Corrections', 'corrections') || nextCorrections;
@@ -1798,7 +2011,7 @@ define([], function () {
         }
 
         function saveTitleCleanupRules(nextRules, successMessage) {
-            var status = view.querySelector('#radioTitleFixesStatus');
+            var status = radioMetaById('radioTitleFixesStatus');
             if (!status || titleCleanupSaveInProgress) return;
             var previousRules = titleCleanupRules;
             titleCleanupSaveInProgress = true;
@@ -1809,8 +2022,9 @@ define([], function () {
                 type: 'POST',
                 url: ApiClient.getUrl('RadioMeta/TitleCleanup'),
                 data: JSON.stringify({ Rules: nextRules }),
-                contentType: 'application/json'
-            }).then(function (data) {
+                contentType: 'application/json',
+                dataType: 'json'
+            }).then(radioMetaReadJson).then(function (data) {
                 var error = getValue(data, 'Error', 'error');
                 if (error) throw new Error(error);
                 titleCleanupRules = getValue(data, 'Rules', 'rules') || nextRules;
@@ -1833,27 +2047,31 @@ define([], function () {
             if (!Number.isInteger(index) || index < 0 || index >= titleCorrections.length) return;
             var correction = titleCorrections[index];
             var original = String(getValue(correction, 'OriginalTitle', 'originalTitle') || '');
-            if (!window.confirm('Remove this exact correction for "' + original + '"? This stops the rule from being applied to future metadata. Existing history titles are not automatically reverted.')) return;
+            radioMetaConfirm('Remove this exact correction for "' + original + '"? This stops the rule from being applied to future metadata. Existing history titles are not automatically reverted.').then(function (confirmed) {
+            if (!confirmed) return;
             var next = titleCorrections.filter(function (_correction, correctionIndex) { return correctionIndex !== index; });
             saveTitleCorrections(next);
+        });
         }
 
         function removeTitleCleanupRule(indexValue) {
             if (titleCleanupSaveInProgress) return;
             var index = Number(indexValue);
             if (!Number.isInteger(index) || index < 0 || index >= titleCleanupRules.length) return;
-            if (!window.confirm('Remove this reusable cleanup rule? Future metadata will no longer use it. Existing history titles are not automatically reverted.')) return;
+            radioMetaConfirm('Remove this reusable cleanup rule? Future metadata will no longer use it. Existing history titles are not automatically reverted.').then(function (confirmed) {
+            if (!confirmed) return;
             var nextRules = titleCleanupRules.filter(function (_rule, ruleIndex) { return ruleIndex !== index; });
             saveTitleCleanupRules(nextRules, 'Reusable title cleanup rule removed and saved.');
+        });
         }
 
         function setHistoryButtonsDisabled(disabled) {
-            var clearButton = view.querySelector('#radioHistoryClear');
-            var historyContainer = view.querySelector('#radioHistory');
+            var clearButton = radioMetaById('radioHistoryClear');
+            var historyContainer = radioMetaById('radioHistory');
             if (clearButton) {
                 clearButton.disabled = disabled || !historyContainer || !historyContainer.querySelector('.radio-history-row');
             }
-            view.querySelectorAll('.radio-history-delete, .radio-history-edit, .radio-history-edit-save, .radio-history-edit-cancel').forEach(function (button) {
+            radioMetaQueryAll('.radio-history-delete, .radio-history-edit, .radio-history-edit-save, .radio-history-edit-cancel').forEach(function (button) {
                 button.disabled = disabled;
             });
         }
@@ -1863,13 +2081,12 @@ define([], function () {
                 return;
             }
             if (activeHistoryEditId) closeHistoryEditor(activeHistoryEditId);
-            if (!window.confirm('Delete this history entry? This cannot be undone.')) {
-                return;
-            }
+            radioMetaConfirm('Delete this history entry? This cannot be undone.').then(function (confirmed) {
+            if (!confirmed) return;
 
             historyActionInProgress = true;
             setHistoryButtonsDisabled(true);
-            var status = view.querySelector('#radioStatus');
+            var status = radioMetaById('radioStatus');
             if (status) {
                 status.textContent = 'Deleting history entry...';
             }
@@ -1878,8 +2095,9 @@ define([], function () {
                 type: 'POST',
                 url: ApiClient.getUrl('RadioMeta/History/Delete'),
                 data: JSON.stringify({ Id: id }),
-                contentType: 'application/json'
-            }).then(function (data) {
+                contentType: 'application/json',
+                dataType: 'json'
+            }).then(radioMetaReadJson).then(function (data) {
                 var error = getValue(data, 'Error', 'error');
                 if (error) {
                     if (status) status.textContent = error;
@@ -1901,6 +2119,7 @@ define([], function () {
                 }
                 loadHistory();
             });
+        });
         }
 
         function clearHistory() {
@@ -1908,17 +2127,16 @@ define([], function () {
                 return;
             }
             if (activeHistoryEditId) closeHistoryEditor(activeHistoryEditId);
-            var container = view.querySelector('#radioHistory');
+            var container = radioMetaById('radioHistory');
             if (!container || !container.querySelector('.radio-history-row')) {
                 return;
             }
-            if (!window.confirm('Clear ALL Radio Meta history? This permanently deletes every recorded entry and cannot be undone.')) {
-                return;
-            }
+            radioMetaConfirm('Clear ALL Radio Meta history? This permanently deletes every recorded entry and cannot be undone.').then(function (confirmed) {
+            if (!confirmed) return;
 
             historyActionInProgress = true;
             setHistoryButtonsDisabled(true);
-            var status = view.querySelector('#radioStatus');
+            var status = radioMetaById('radioStatus');
             if (status) {
                 status.textContent = 'Clearing all radio play history...';
             }
@@ -1927,8 +2145,9 @@ define([], function () {
                 type: 'POST',
                 url: ApiClient.getUrl('RadioMeta/History/Clear'),
                 data: JSON.stringify({}),
-                contentType: 'application/json'
-            }).then(function (data) {
+                contentType: 'application/json',
+                dataType: 'json'
+            }).then(radioMetaReadJson).then(function (data) {
                 var error = getValue(data, 'Error', 'error');
                 if (error) {
                     if (status) status.textContent = error;
@@ -1950,11 +2169,12 @@ define([], function () {
                 }
                 loadHistory();
             });
+        });
         }
 
         function updateStationFolderShortcut(folder) {
-            var display = view.querySelector('#radioStationFolderDisplay');
-            var shortcut = view.querySelector('#radioStationFolderShortcut');
+            var display = radioMetaById('radioStationFolderDisplay');
+            var shortcut = radioMetaById('radioStationFolderShortcut');
             if (!display) return;
 
             var configuredFolder = String(folder || '').trim();
@@ -1973,8 +2193,9 @@ define([], function () {
         }
 
         function focusStationFolderSetting() {
-            var section = view.querySelector('#radioPathSettingsSection');
-            var input = view.querySelector('#radioStationFolder');
+            selectRadioMetaTab('settings');
+            var section = radioMetaById('radioPathSettingsSection');
+            var input = radioMetaById('radioStationFolder');
             if (section && typeof section.scrollIntoView === 'function') {
                 section.scrollIntoView({ block: 'center', behavior: 'auto' });
             }
@@ -1985,7 +2206,7 @@ define([], function () {
         }
 
         function loadPathSettings() {
-            var status = view.querySelector('#radioPathSettingsStatus');
+            var status = radioMetaById('radioPathSettingsStatus');
             if (!status || pathSettingsRequestInProgress || pathSettingsSaveInProgress) {
                 return;
             }
@@ -2000,9 +2221,10 @@ define([], function () {
                         return;
                     }
 
-                    var stationFolderInput = view.querySelector('#radioStationFolder');
-                    var ffprobePathInput = view.querySelector('#radioFfprobePath');
-                    var adaptiveRoutingInput = view.querySelector('#radioAdaptiveMetadataRouting');
+                    var stationFolderInput = radioMetaById('radioStationFolder');
+                    var ffprobePathInput = radioMetaById('radioFfprobePath');
+                    var adaptiveRoutingInput = radioMetaById('radioAdaptiveMetadataRouting');
+                    var outsideFolderInput = radioMetaById('radioStationsOutsideFolder');
                     if (stationFolderInput) {
                         stationFolderInput.value = String(getValue(data, 'StationFolder', 'stationFolder') || '');
                     }
@@ -2013,6 +2235,10 @@ define([], function () {
                     if (adaptiveRoutingInput) {
                         // Missing values from an older server default to on for the adaptive-routing release.
                         adaptiveRoutingInput.checked = getValue(data, 'EnableAdaptiveMetadataRouting', 'enableAdaptiveMetadataRouting') !== false;
+                    }
+                    if (outsideFolderInput) {
+                        // Missing values from an older server default to on.
+                        outsideFolderInput.checked = getValue(data, 'EnableStationsOutsideFolder', 'enableStationsOutsideFolder') !== false;
                     }
 
                     var automatic = !!getValue(data, 'AutomaticStationDetection', 'automaticStationDetection');
@@ -2037,12 +2263,16 @@ define([], function () {
                         messages.push('FFprobe path is blank; searching Windows PATH.');
                     }
 
+                    if (!automatic && getValue(data, 'EnableStationsOutsideFolder', 'enableStationsOutsideFolder') !== false) {
+                        messages.push('Audio stations outside the station folder, including web streams, also receive metadata.');
+                    }
+
                     status.textContent = messages.join(' ');
                 })
                 .catch(function (error) {
                     status.textContent = 'Unable to load path settings. Please check the connection and retry.';
                     updateStationFolderShortcut('');
-                    var shortcutDisplay = view.querySelector('#radioStationFolderDisplay');
+                    var shortcutDisplay = radioMetaById('radioStationFolderDisplay');
                     if (shortcutDisplay) {
                         shortcutDisplay.textContent = 'Unable to load';
                         shortcutDisplay.title = error && error.message ? error.message : String(error);
@@ -2055,11 +2285,12 @@ define([], function () {
         }
 
         function savePathSettings() {
-            var status = view.querySelector('#radioPathSettingsStatus');
-            var saveButton = view.querySelector('#radioPathSettingsSave');
-            var stationFolderInput = view.querySelector('#radioStationFolder');
-            var ffprobePathInput = view.querySelector('#radioFfprobePath');
-            var adaptiveRoutingInput = view.querySelector('#radioAdaptiveMetadataRouting');
+            var status = radioMetaById('radioPathSettingsStatus');
+            var saveButton = radioMetaById('radioPathSettingsSave');
+            var stationFolderInput = radioMetaById('radioStationFolder');
+            var ffprobePathInput = radioMetaById('radioFfprobePath');
+            var adaptiveRoutingInput = radioMetaById('radioAdaptiveMetadataRouting');
+            var outsideFolderInput = radioMetaById('radioStationsOutsideFolder');
             if (!status || !stationFolderInput || !ffprobePathInput || !adaptiveRoutingInput || pathSettingsSaveInProgress) {
                 return;
             }
@@ -2078,6 +2309,7 @@ define([], function () {
             stationFolderInput.disabled = true;
             ffprobePathInput.disabled = true;
             adaptiveRoutingInput.disabled = true;
+            if (outsideFolderInput) outsideFolderInput.disabled = true;
             status.textContent = 'Saving path settings to the plugin XML...';
 
             ApiClient.ajax({
@@ -2086,19 +2318,38 @@ define([], function () {
                 data: JSON.stringify({
                     StationFolder: stationFolder,
                     FfprobePath: ffprobePath,
-                    EnableAdaptiveMetadataRouting: adaptiveRoutingInput.checked
+                    EnableAdaptiveMetadataRouting: adaptiveRoutingInput.checked,
+                    // Sent only when the checkbox exists, so the saved value is otherwise kept.
+                    EnableStationsOutsideFolder: outsideFolderInput ? outsideFolderInput.checked : undefined
                 }),
-                contentType: 'application/json'
-            }).then(function (data) {
+                contentType: 'application/json',
+                dataType: 'json'
+            }).then(radioMetaReadJson).then(function (data) {
                 var error = getValue(data, 'Error', 'error');
                 if (error) {
                     status.textContent = error;
                     return;
                 }
 
-                stationFolderInput.value = String(getValue(data, 'StationFolder', 'stationFolder') || '');
-                ffprobePathInput.value = String(getValue(data, 'FfprobePath', 'ffprobePath') || '');
-                adaptiveRoutingInput.checked = getValue(data, 'EnableAdaptiveMetadataRouting', 'enableAdaptiveMetadataRouting') !== false;
+                // Fill a field only from a value the reply actually contains, so a
+                // reply that could not be read never blanks the fields (blank
+                // fields would then be saved by the next Save; fixed in 1.3.152).
+                function replyHas(pascalName, camelName) {
+                    return !!data && typeof data === 'object' &&
+                        (data[pascalName] !== undefined || data[camelName] !== undefined);
+                }
+                if (replyHas('StationFolder', 'stationFolder')) {
+                    stationFolderInput.value = String(getValue(data, 'StationFolder', 'stationFolder') || '');
+                }
+                if (replyHas('FfprobePath', 'ffprobePath')) {
+                    ffprobePathInput.value = String(getValue(data, 'FfprobePath', 'ffprobePath') || '');
+                }
+                if (replyHas('EnableAdaptiveMetadataRouting', 'enableAdaptiveMetadataRouting')) {
+                    adaptiveRoutingInput.checked = getValue(data, 'EnableAdaptiveMetadataRouting', 'enableAdaptiveMetadataRouting') !== false;
+                }
+                if (outsideFolderInput && replyHas('EnableStationsOutsideFolder', 'enableStationsOutsideFolder')) {
+                    outsideFolderInput.checked = getValue(data, 'EnableStationsOutsideFolder', 'enableStationsOutsideFolder') !== false;
+                }
                 updateStationFolderShortcut(stationFolderInput.value);
                 var message = String(getValue(data, 'Message', 'message') || 'Path settings saved to the plugin XML.');
                 status.textContent = message + ' Routing changes apply to the next metadata lookup; station-folder changes apply on the next playback progress update.';
@@ -2114,6 +2365,7 @@ define([], function () {
                 stationFolderInput.disabled = false;
                 ffprobePathInput.disabled = false;
                 adaptiveRoutingInput.disabled = false;
+                if (outsideFolderInput) outsideFolderInput.disabled = false;
             });
         }
 
@@ -2147,6 +2399,12 @@ define([], function () {
                 return;
             }
 
+            var stationEdit = target.closest('button[data-station-mode-edit]');
+            if (stationEdit) {
+                openStationModeDialog(stationEdit.getAttribute('data-station-mode-edit'));
+                return;
+            }
+
             var stationRemove = target.closest('button[data-station-mode-remove]');
             if (stationRemove) {
                 removeStationModeRule(stationRemove.getAttribute('data-station-mode-remove'));
@@ -2176,13 +2434,149 @@ define([], function () {
                 return;
             }
 
-            var nextRules = ignoreRules.filter(function (_rule, ruleIndex) {
-                return ruleIndex !== index;
+            var removedRule = ignoreRules[index];
+            var removedStation = getRuleStation(removedRule);
+            radioMetaConfirm('Remove the ignore phrase "' + getRulePhrase(removedRule) + '" (' +
+                (removedStation ? 'station ' + removedStation : 'all stations') + ')? Titles containing it will be shown again.',
+                'Remove phrase').then(function (confirmed) {
+                if (!confirmed) return;
+                // The list may have changed while the question was open; remove by content.
+                var nextRules = ignoreRules.filter(function (rule) { return rule !== removedRule; });
+                if (nextRules.length === ignoreRules.length) return;
+                saveIgnoreRules(nextRules, 'Ignore phrase removed and saved.', false);
             });
-            saveIgnoreRules(nextRules, 'Ignore phrase removed and saved.', false);
+        }
+
+        // ---------------------------------------------------------------
+        // Tabs (1.3.152). Emby's own header tabs (maintabsmanager), as on
+        // Emby's admin pages; if that module is not available, the same tabs
+        // are shown at the top of the page. The selected tab is kept in the
+        // page address (&tab=...), so Back and reloading keep it.
+        // ---------------------------------------------------------------
+        var RADIO_META_TABS = [
+            { key: 'stations', name: 'Stations' },
+            { key: 'history', name: 'History' },
+            { key: 'rules', name: 'Metadata Rules' },
+            { key: 'settings', name: 'Settings' },
+            { key: 'diagnostics', name: 'Diagnostics' }
+        ];
+        var radioMetaCurrentTab = -1;
+        var radioMetaHeaderTabs = false;
+
+        function radioMetaTabPanels() {
+            return RADIO_META_TABS.map(function (tab) {
+                return view.querySelector('.radioMetaTab[data-tab="' + tab.key + '"]');
+            });
+        }
+
+        function radioMetaTabIndex(key) {
+            for (var i = 0; i < RADIO_META_TABS.length; i++) {
+                if (RADIO_META_TABS[i].key === key) return i;
+            }
+            return -1;
+        }
+
+        function radioMetaTabFromAddress() {
+            var match = /[?&]tab=([a-z]+)/.exec(String(window.location.hash || ''));
+            var index = match ? radioMetaTabIndex(match[1]) : -1;
+            return index >= 0 ? index : 0;
+        }
+
+        function rememberRadioMetaTab(key) {
+            try {
+                var hash = String(window.location.hash || '');
+                if (!hash) return;
+                var next = /[?&]tab=[a-z]*/.test(hash)
+                    ? hash.replace(/([?&])tab=[a-z]*/, '$1tab=' + key)
+                    : hash + (hash.indexOf('?') >= 0 ? '&' : '?') + 'tab=' + key;
+                if (next !== hash && window.history && typeof window.history.replaceState === 'function') {
+                    window.history.replaceState(window.history.state, '', window.location.href.split('#')[0] + next);
+                }
+            } catch (ignore) { }
+        }
+
+        // Each tab loads its contents when it is opened.
+        function onRadioMetaTabShown(key) {
+            if (key === 'stations') {
+                if (!stationFolderPanelVisible) toggleStationFolderVisibility();
+                else scanStationFolder();
+            } else if (key === 'history') {
+                if (!historyPanelVisible) toggleHistoryVisibility();
+                else loadHistory();
+            }
+        }
+
+        function showRadioMetaTab(index) {
+            if (!(index >= 0 && index < RADIO_META_TABS.length) || index === radioMetaCurrentTab) return;
+            radioMetaCurrentTab = index;
+            radioMetaTabPanels().forEach(function (panel, panelIndex) {
+                if (panel) panel.classList.toggle('is-active', panelIndex === index);
+            });
+            Array.prototype.slice.call(view.querySelectorAll('.radioMetaInPageTabs button')).forEach(function (button, buttonIndex) {
+                button.classList.toggle('emby-tab-button-active', buttonIndex === index);
+                button.setAttribute('aria-selected', buttonIndex === index ? 'true' : 'false');
+            });
+            rememberRadioMetaTab(RADIO_META_TABS[index].key);
+            onRadioMetaTabShown(RADIO_META_TABS[index].key);
+        }
+
+        function selectRadioMetaTab(key) {
+            var index = radioMetaTabIndex(key);
+            if (index < 0) return;
+            var tabs = radioMetaEmby.mainTabsManager;
+            if (radioMetaHeaderTabs && tabs && typeof tabs.selectedTabIndex === 'function') {
+                try { tabs.selectedTabIndex(index); } catch (ignore) { }
+            }
+            showRadioMetaTab(index);
+        }
+
+        function setUpRadioMetaTabs() {
+            var index = radioMetaTabFromAddress();
+            var inPageTabs = view.querySelector('.radioMetaInPageTabs');
+            var tabs = radioMetaEmby.mainTabsManager;
+            radioMetaHeaderTabs = false;
+            // Emby's header may report the first tab while setting up; the
+            // tab is (re)loaded once either way.
+            radioMetaCurrentTab = -1;
+            if (tabs && typeof tabs.setTabs === 'function') {
+                try {
+                    tabs.setTabs(view, index, function () {
+                        return RADIO_META_TABS.map(function (tab) { return { name: tab.name }; });
+                    }, radioMetaTabPanels, function (event) {
+                        var selected = event && event.detail ? Number(event.detail.selectedTabIndex) : NaN;
+                        if (!isNaN(selected)) showRadioMetaTab(selected);
+                    });
+                    radioMetaHeaderTabs = true;
+                } catch (error) {
+                    console.warn('Radio Meta: Emby header tabs are not available; using in-page tabs.', error);
+                }
+            }
+            if (inPageTabs) {
+                if (!radioMetaHeaderTabs && !inPageTabs.firstChild) {
+                    RADIO_META_TABS.forEach(function (tab, tabIndex) {
+                        var button = document.createElement('button');
+                        button.type = 'button';
+                        button.className = 'emby-button emby-tab-button';
+                        button.setAttribute('role', 'tab');
+                        button.textContent = tab.name;
+                        button.addEventListener('click', function () { showRadioMetaTab(tabIndex); });
+                        inPageTabs.appendChild(button);
+                    });
+                }
+                inPageTabs.classList.toggle('hide', radioMetaHeaderTabs);
+            }
+            showRadioMetaTab(index);
+        }
+
+        // Emby removes header tabs itself when the next page is shown
+        // (appheader, before that page appears), so they are not cleared here:
+        // doing it at viewhide could remove the next page's own tabs.
+        function clearRadioMetaTabs() {
+            closeRadioMetaDialogs();
         }
 
         function onViewShow() {
+            radioMetaModulesReady.then(setUpRadioMetaTabs);
             if (historyPanelVisible) loadHistory();
             loadStationModes();
             loadIgnorePhrases();
@@ -2198,6 +2592,7 @@ define([], function () {
         }
 
         function onViewHide() {
+            clearRadioMetaTabs();
             if (refreshTimer !== null) {
                 window.clearInterval(refreshTimer);
                 refreshTimer = null;
@@ -2205,12 +2600,12 @@ define([], function () {
         }
 
         function createStationFile() {
-            var nameInput = view.querySelector('#radioStationCreateName');
-            var urlInput = view.querySelector('#radioStationCreateUrl');
-            var artworkInput = view.querySelector('#radioStationCreateArtworkUrl');
-            var proxyInput = view.querySelector('#radioStationCreateUseProxy');
-            var button = view.querySelector('#radioStationCreateButton');
-            var status = view.querySelector('#radioStationCreateStatus');
+            var nameInput = radioMetaById('radioStationCreateName');
+            var urlInput = radioMetaById('radioStationCreateUrl');
+            var artworkInput = radioMetaById('radioStationCreateArtworkUrl');
+            var proxyInput = radioMetaById('radioStationCreateUseProxy');
+            var button = radioMetaById('radioStationCreateButton');
+            var status = radioMetaById('radioStationCreateStatus');
             if (!nameInput || !urlInput || !artworkInput || !button || !status || button.disabled) return;
             var name = nameInput.value.trim();
             var streamUrl = urlInput.value.trim();
@@ -2239,6 +2634,7 @@ define([], function () {
                         (artworkPath ? '. Logo saved: ' + artworkPath : (artworkUrl ? '. Logo URL was supplied.' : '. No logo supplied.')) +
                         (logoWarning ? ' ' + logoWarning : '');
                     status.textContent = createdMessage + ' Resolving targeted Emby library refresh...';
+                    closeRadioMetaDialogs('radioStationCreateForm');
                     nameInput.value = '';
                     urlInput.value = '';
                     artworkInput.value = '';
@@ -2437,25 +2833,25 @@ define([], function () {
         }
 
         function diagnosticSetCopyButtonVisible(visible) {
-            var button = view.querySelector('#radioDiagnosticsCopy');
+            var button = radioMetaById('radioDiagnosticsCopy');
             if (button) button.style.display = visible ? '' : 'none';
         }
 
         function diagnosticRender(checks, headerLines, recentEvents, performance) {
             recentEvents = Array.isArray(recentEvents) ? recentEvents : [];
             performance = performance && typeof performance === 'object' ? performance : null;
-            var results = view.querySelector('#radioDiagnosticsResults');
-            var summary = view.querySelector('#radioDiagnosticsSummary');
-            var checkList = view.querySelector('#radioDiagnosticsChecks');
-            var eventsSection = view.querySelector('#radioDiagnosticsEvents');
-            var eventList = view.querySelector('#radioDiagnosticsEventList');
-            var performanceSection = view.querySelector('#radioDiagnosticsPerformance');
-            var performanceSummary = view.querySelector('#radioDiagnosticsPerformanceSummary');
-            var performanceList = view.querySelector('#radioDiagnosticsPerformanceList');
-            var report = view.querySelector('#radioDiagnosticsReport');
-            var status = view.querySelector('#radioDiagnosticsStatus');
-            var runButton = view.querySelector('#radioDiagnosticsRun');
-            var copyButton = view.querySelector('#radioDiagnosticsCopy');
+            var results = radioMetaById('radioDiagnosticsResults');
+            var summary = radioMetaById('radioDiagnosticsSummary');
+            var checkList = radioMetaById('radioDiagnosticsChecks');
+            var eventsSection = radioMetaById('radioDiagnosticsEvents');
+            var eventList = radioMetaById('radioDiagnosticsEventList');
+            var performanceSection = radioMetaById('radioDiagnosticsPerformance');
+            var performanceSummary = radioMetaById('radioDiagnosticsPerformanceSummary');
+            var performanceList = radioMetaById('radioDiagnosticsPerformanceList');
+            var report = radioMetaById('radioDiagnosticsReport');
+            var status = radioMetaById('radioDiagnosticsStatus');
+            var runButton = radioMetaById('radioDiagnosticsRun');
+            var copyButton = radioMetaById('radioDiagnosticsCopy');
             if (!results || !summary || !checkList || !report || !status) return;
 
             var passCount = checks.filter(function (item) { return item.status === 'PASS'; }).length;
@@ -2474,18 +2870,22 @@ define([], function () {
             while (checkList.firstChild) checkList.removeChild(checkList.firstChild);
             checks.forEach(function (item) {
                 var row = document.createElement('div');
-                row.className = 'radio-diagnostic-check';
+                row.className = 'listItem listItem-border radio-diagnostic-check';
                 var state = document.createElement('span');
                 state.className = 'radio-diagnostic-status ' + item.status.toLowerCase();
                 state.textContent = item.status;
-                var name = document.createElement('strong');
+                var body = document.createElement('div');
+                body.className = 'listItemBody two-line';
+                var name = document.createElement('div');
+                name.className = 'listItemBodyText';
                 name.textContent = item.name;
-                var detail = document.createElement('span');
-                detail.className = 'radio-diagnostic-detail';
+                var detail = document.createElement('div');
+                detail.className = 'listItemBodyText listItemBodyText-secondary secondaryText radio-diagnostic-detail';
                 detail.textContent = item.detail;
+                body.appendChild(name);
+                body.appendChild(detail);
                 row.appendChild(state);
-                row.appendChild(name);
-                row.appendChild(detail);
+                row.appendChild(body);
                 checkList.appendChild(row);
             });
 
@@ -2732,9 +3132,9 @@ define([], function () {
         }
 
         function runRadioMetaDiagnostics() {
-            var runButton = view.querySelector('#radioDiagnosticsRun');
-            var statusElement = view.querySelector('#radioDiagnosticsStatus');
-            var resultsElement = view.querySelector('#radioDiagnosticsResults');
+            var runButton = radioMetaById('radioDiagnosticsRun');
+            var statusElement = radioMetaById('radioDiagnosticsStatus');
+            var resultsElement = radioMetaById('radioDiagnosticsResults');
             if (!runButton || !statusElement || runButton.disabled) return;
 
             runButton.disabled = true;
@@ -2745,7 +3145,7 @@ define([], function () {
 
             var checks = [];
             var startedAt = new Date();
-            var dashboardControllerInfo = window.__radioMetaDashboardControllerInfo_v1328;
+            var dashboardControllerInfo = window.__radioMetaDashboardControllerInfo_v1352;
             diagnosticAddCheck(checks,
                 dashboardControllerInfo && dashboardControllerInfo.initialized === true ? 'PASS' : 'WARN',
                 'Dashboard controller bundle',
@@ -2853,7 +3253,7 @@ define([], function () {
 
                 var localPlayerItemId = '';
                 try {
-                    var bridgeForSessionMatch = window.__radioMetaPlayerIntegration1328;
+                    var bridgeForSessionMatch = window.__radioMetaPlayerIntegration1352;
                     var bridgePlayer = bridgeForSessionMatch && bridgeForSessionMatch.modules &&
                         bridgeForSessionMatch.modules.currentPlayer && bridgeForSessionMatch.modules.currentPlayer.get();
                     var bridgeItem = bridgePlayer && bridgeForSessionMatch.modules.playbackManager &&
@@ -2927,6 +3327,17 @@ define([], function () {
                     } else {
                         diagnosticAddCheck(checks, 'INFO', 'Adaptive metadata routing',
                             'This plugin build did not report the adaptive-routing toggle. The setting may be unavailable in this build or its response.');
+                    }
+
+                    if (pathData && diagnosticValue(pathData, 'EnableStationsOutsideFolder', 'enableStationsOutsideFolder') !== undefined) {
+                        var outsideFolderOn = diagnosticValue(pathData, 'EnableStationsOutsideFolder', 'enableStationsOutsideFolder') !== false;
+                        var outsideAutomatic = !!diagnosticValue(pathData, 'AutomaticStationDetection', 'automaticStationDetection');
+                        diagnosticAddCheck(checks, 'INFO', 'Stations outside the station folder',
+                            outsideAutomatic
+                                ? 'The Station folder is blank, so automatic detection already gives metadata to every audio .strm and web-address station; this option has no effect.'
+                                : outsideFolderOn
+                                    ? 'On. Any audio .strm playing from another folder, and any audio station played straight from a web address (for example WebStreams), also receives metadata. Nothing is listed, scanned or written.'
+                                    : 'Off. Only stations in the Station folder receive metadata.');
                     }
 
                     var readerLimit = Number(diagnosticValue(health, 'DirectIcyMaxIntervals', 'directIcyMaxIntervals') || 0);
@@ -3054,21 +3465,48 @@ define([], function () {
                     var bridgeLookupWindow = window;
                     for (var bridgeLookupDepth = 0; bridgeLookupDepth < 5; bridgeLookupDepth++) {
                         try {
-                            browserPlayerBridge = bridgeLookupWindow.__radioMetaPlayerIntegration1328 || null;
+                            browserPlayerBridge = bridgeLookupWindow.__radioMetaPlayerIntegration1352 || null;
                             if (browserPlayerBridge || !bridgeLookupWindow.parent || bridgeLookupWindow.parent === bridgeLookupWindow) break;
                             bridgeLookupWindow = bridgeLookupWindow.parent;
                         } catch (_) {
                             break;
                         }
                     }
+                    // An older cached player script uses an older version key.
+                    var stalePlayerScriptVersion = '';
+                    if (!browserPlayerBridge) {
+                        try {
+                            Object.keys(window).forEach(function (key) {
+                                if (/^__radioMetaPlayerIntegration\d+$/.test(key) && window[key] && window[key].scriptVersion) {
+                                    stalePlayerScriptVersion = String(window[key].scriptVersion);
+                                } else if (/^__radioMetaPlayerIntegration\d+$/.test(key) && !stalePlayerScriptVersion) {
+                                    stalePlayerScriptVersion = 'an older version';
+                                }
+                            });
+                        } catch (_) { stalePlayerScriptVersion = ''; }
+                    } else if (browserPlayerBridge.scriptOutOfDate) {
+                        stalePlayerScriptVersion = String(browserPlayerBridge.scriptVersion || '');
+                    }
+                    if (stalePlayerScriptVersion) {
+                        diagnosticAddCheck(checks, 'WARN', 'Player script out of date',
+                            'This browser is running a cached Radio Meta player script (' + stalePlayerScriptVersion +
+                            ') that is older than the plugin on the server. Press Ctrl+F5 (on a phone, close and reopen the tab) to load the new version.');
+                    }
                     var browserBridgeStarted = !!(browserPlayerBridge && browserPlayerBridge.started === true);
                     var browserModulesConnected = !!(browserPlayerBridge && browserPlayerBridge.modules &&
                         browserPlayerBridge.modules.currentPlayer && browserPlayerBridge.modules.playbackManager && browserPlayerBridge.modules.events);
-                    var browserBridgeStatus = browserBridgeStarted && browserModulesConnected ? 'PASS' :
-                        (localRadioSession ? 'WARN' : 'INFO');
+                    // The players only get the song through Radio Meta's hook on Emby's
+                    // display event; without it they show the station title.
+                    var browserDisplayHookInPlace = !!(browserModulesConnected && browserPlayerBridge.eventTriggerWrapper &&
+                        browserPlayerBridge.modules.events.trigger !== browserPlayerBridge.eventTriggerOriginal);
+                    var browserBridgeStatus = browserBridgeStarted && browserModulesConnected
+                        ? (browserDisplayHookInPlace ? 'PASS' : 'FAIL')
+                        : (localRadioSession ? 'WARN' : 'INFO');
                     diagnosticAddCheck(checks, browserBridgeStatus, 'Native player browser bridge',
-                        browserBridgeStarted && browserModulesConnected
-                            ? 'The DLL-embedded browser bridge is running and connected to Emby current-player, PlaybackManager, and event modules.'
+                        browserBridgeStarted && browserModulesConnected && browserDisplayHookInPlace
+                            ? 'The DLL-embedded browser bridge is running and connected to Emby current-player, PlaybackManager, and event modules, and its hook on the player display is in place.'
+                            : browserBridgeStarted && browserModulesConnected
+                                ? 'The browser bridge is running, but its hook on Emby\'s player display is missing, so the players show the station title instead of the song. Radio Meta puts it back on its next check (within 2.5 seconds); rerun diagnostics. If this stays, press Ctrl+F5.'
                             : localRadioSession
                                 ? 'This browser has an active Radio Meta session, but its embedded player bridge is not confirmed as running and connected. Restart the web app and rerun diagnostics.'
                                 : 'The bridge is not visible in this page context. This is informational when diagnostics are viewed from another device or browser context.');
@@ -3473,6 +3911,24 @@ define([], function () {
                                 String(diagnosticValue(track, 'UpdatedAt', 'updatedAt') || 'unknown'));
                         });
                     }
+                    var settingsSaves = diagnosticValue(health, 'RecentSettingsSaves', 'recentSettingsSaves');
+                    if (Array.isArray(settingsSaves)) {
+                        headerLines.push('Recent settings saves (in-memory since start; paths omitted; also in the Emby server log):');
+                        if (!settingsSaves.length) {
+                            headerLines.push('  No settings saves since Emby started.');
+                        } else {
+                            settingsSaves.forEach(function (save) {
+                                headerLines.push('  ' +
+                                    String(diagnosticValue(save, 'TimestampUtc', 'timestampUtc') || 'time unknown') + ' | ' +
+                                    String(diagnosticValue(save, 'Device', 'device') || 'unknown device') +
+                                    ' | station folder ' + String(diagnosticValue(save, 'StationFolder', 'stationFolder') || '?') +
+                                    ' | FFprobe path ' + String(diagnosticValue(save, 'FfprobePath', 'ffprobePath') || '?') +
+                                    ' | adaptive routing ' + String(diagnosticValue(save, 'AdaptiveRouting', 'adaptiveRouting') || '?') +
+                                    ' | outside folder ' + String(diagnosticValue(save, 'StationsOutsideFolder', 'stationsOutsideFolder') || '?') +
+                                    ' | ' + String(diagnosticValue(save, 'Result', 'result') || ''));
+                            });
+                        }
+                    }
                     var operationReport = diagnosticValue(health, 'RecentStationOperations', 'recentStationOperations');
                     if (Array.isArray(operationReport)) {
                         headerLines.push('Recent station-file operations (in-memory; paths and URLs omitted):');
@@ -3623,8 +4079,8 @@ define([], function () {
         }
 
         function copyRadioMetaDiagnosticReport() {
-            var report = view.querySelector('#radioDiagnosticsReport');
-            var status = view.querySelector('#radioDiagnosticsStatus');
+            var report = radioMetaById('radioDiagnosticsReport');
+            var status = radioMetaById('radioDiagnosticsStatus');
             if (!report || !report.textContent) return;
             var text = report.textContent;
 
@@ -3662,17 +4118,17 @@ define([], function () {
             } else fallbackCopy();
         }
 
-        var diagnosticsRunButton = view.querySelector('#radioDiagnosticsRun');
+        var diagnosticsRunButton = radioMetaById('radioDiagnosticsRun');
         if (diagnosticsRunButton) diagnosticsRunButton.addEventListener('click', runRadioMetaDiagnostics);
-        var diagnosticsCopyButton = view.querySelector('#radioDiagnosticsCopy');
+        var diagnosticsCopyButton = radioMetaById('radioDiagnosticsCopy');
         if (diagnosticsCopyButton) diagnosticsCopyButton.addEventListener('click', copyRadioMetaDiagnosticReport);
 
-        var stationScanButton = view.querySelector('#radioStationScanButton');
+        var stationScanButton = radioMetaById('radioStationScanButton');
         if (stationScanButton) {
             stationScanButton.addEventListener('click', toggleStationFolderVisibility);
         }
         updateStationFolderVisibilityButton();
-        var stationCreateButton = view.querySelector('#radioStationCreateButton');
+        var stationCreateButton = radioMetaById('radioStationCreateButton');
         if (stationCreateButton) stationCreateButton.addEventListener('click', createStationFile);
 
         function resolveCurrentPlaybackInfoStation() {
@@ -3798,7 +4254,7 @@ define([], function () {
         }
 
         function setCurrentStreamTestResult(state, message, detail) {
-            var result = view.querySelector('#radioStationStreamTestResult');
+            var result = radioMetaById('radioStationStreamTestResult');
             if (!result) return;
             result.setAttribute('data-state', state || 'idle');
             result.textContent = message || '';
@@ -3903,11 +4359,11 @@ define([], function () {
         }
 
         function addCurrentlyPlayingStationToForm() {
-            var button = view.querySelector('#radioStationAddCurrentButton');
-            var status = view.querySelector('#radioStationCreateStatus');
-            var nameInput = view.querySelector('#radioStationCreateName');
-            var urlInput = view.querySelector('#radioStationCreateUrl');
-            var artworkInput = view.querySelector('#radioStationCreateArtworkUrl');
+            var button = radioMetaById('radioStationAddCurrentButton');
+            var status = radioMetaById('radioStationCreateStatus');
+            var nameInput = radioMetaById('radioStationCreateName');
+            var urlInput = radioMetaById('radioStationCreateUrl');
+            var artworkInput = radioMetaById('radioStationCreateArtworkUrl');
             if (!button || !status || !nameInput || !urlInput || !artworkInput || button.disabled) return;
 
             button.disabled = true;
@@ -4168,10 +4624,10 @@ define([], function () {
             if (!imported.recognized) return; // Ordinary station-name pastes are unchanged.
             event.preventDefault();
 
-            var status = view.querySelector('#radioStationCreateStatus');
-            var nameInput = view.querySelector('#radioStationCreateName');
-            var urlInput = view.querySelector('#radioStationCreateUrl');
-            var artworkInput = view.querySelector('#radioStationCreateArtworkUrl');
+            var status = radioMetaById('radioStationCreateStatus');
+            var nameInput = radioMetaById('radioStationCreateName');
+            var urlInput = radioMetaById('radioStationCreateUrl');
+            var artworkInput = radioMetaById('radioStationCreateArtworkUrl');
             if (!nameInput || !urlInput || !artworkInput) {
                 if (status) status.textContent = 'Stream Capture data was recognized, but the station form fields could not be found.';
                 return;
@@ -4222,13 +4678,30 @@ define([], function () {
             (name ? (streamUrl ? (artworkUrl ? nameInput : artworkInput) : urlInput) : nameInput).focus();
         }
 
-        var stationCreateNamePasteInput = view.querySelector('#radioStationCreateName');
+        var stationCreateNamePasteInput = radioMetaById('radioStationCreateName');
         if (stationCreateNamePasteInput) {
             stationCreateNamePasteInput.addEventListener('paste', importRadioMetaStreamCapturePaste);
         }
 
-        var stationAddCurrentButton = view.querySelector('#radioStationAddCurrentButton');
-        if (stationAddCurrentButton) stationAddCurrentButton.addEventListener('click', addCurrentlyPlayingStationToForm);
+        var stationAddCurrentButton = radioMetaById('radioStationAddCurrentButton');
+        if (stationAddCurrentButton) stationAddCurrentButton.addEventListener('click', function () {
+            openRadioMetaFormDialog('radioStationCreateForm');
+            addCurrentlyPlayingStationToForm();
+        });
+        var stationNewButton = radioMetaById('radioStationNewButton');
+        if (stationNewButton) stationNewButton.addEventListener('click', function () {
+            openRadioMetaFormDialog('radioStationCreateForm');
+            var nameInput = radioMetaById('radioStationCreateName');
+            if (nameInput) focusRadioMetaWithoutScrolling(nameInput, false);
+        });
+        var stationModeNewButton = radioMetaById('radioStationModeNew');
+        if (stationModeNewButton) stationModeNewButton.addEventListener('click', function () { openStationModeDialog(''); });
+        var ignoreNewButton = radioMetaById('radioIgnoreNew');
+        if (ignoreNewButton) ignoreNewButton.addEventListener('click', function () {
+            openRadioMetaFormDialog('radioIgnoreForm');
+            var phrase = radioMetaById('radioIgnorePhrase');
+            if (phrase) focusRadioMetaWithoutScrolling(phrase, false);
+        });
         ['#radioStationCreateName', '#radioStationCreateUrl', '#radioStationCreateArtworkUrl'].forEach(function (selector) {
             var input = view.querySelector(selector);
             if (input) input.addEventListener('keydown', function (event) {
@@ -4236,11 +4709,11 @@ define([], function () {
             });
         });
 
-        var stationModeAddButton = view.querySelector('#radioStationModeAdd');
+        var stationModeAddButton = radioMetaById('radioStationModeAdd');
         if (stationModeAddButton) {
             stationModeAddButton.addEventListener('click', addStationModeRule);
         }
-        var stationModeNameInput = view.querySelector('#radioStationModeName');
+        var stationModeNameInput = radioMetaById('radioStationModeName');
         if (stationModeNameInput) {
             stationModeNameInput.addEventListener('input', function () {
                 var name = stationModeNameInput.value.trim().toLowerCase();
@@ -4248,8 +4721,8 @@ define([], function () {
                     return getModeStation(rule).toLowerCase() === name;
                 });
                 if (!existing) return;
-                var modeSelect = view.querySelector('#radioStationModeValue');
-                var delaySelect = view.querySelector('#radioStationModeDelay');
+                var modeSelect = radioMetaById('radioStationModeValue');
+                var delaySelect = radioMetaById('radioStationModeDelay');
                 if (modeSelect) modeSelect.value = getStationMode(existing);
                 if (delaySelect) delaySelect.value = String(getStationModeDelaySeconds(existing));
             });
@@ -4261,12 +4734,12 @@ define([], function () {
             });
         }
 
-        var stationFolderChangeButton = view.querySelector('#radioStationFolderChange');
+        var stationFolderChangeButton = radioMetaById('radioStationFolderChange');
         if (stationFolderChangeButton) {
             stationFolderChangeButton.addEventListener('click', focusStationFolderSetting);
         }
 
-        var pathSettingsSaveButton = view.querySelector('#radioPathSettingsSave');
+        var pathSettingsSaveButton = radioMetaById('radioPathSettingsSave');
         if (pathSettingsSaveButton) {
             pathSettingsSaveButton.addEventListener('click', savePathSettings);
         }
@@ -4282,23 +4755,23 @@ define([], function () {
             }
         });
 
-        var historyScanButton = view.querySelector('#radioHistoryScan');
+        var historyScanButton = radioMetaById('radioHistoryScan');
         if (historyScanButton) {
             historyScanButton.addEventListener('click', toggleHistoryVisibility);
         }
 
-        var historyClearButton = view.querySelector('#radioHistoryClear');
+        var historyClearButton = radioMetaById('radioHistoryClear');
         if (historyClearButton) {
             historyClearButton.addEventListener('click', clearHistory);
         }
 
         updateHistoryVisibilityButton();
 
-        var addButton = view.querySelector('#radioIgnoreAdd');
+        var addButton = radioMetaById('radioIgnoreAdd');
         if (addButton) {
             addButton.addEventListener('click', addIgnorePhrase);
         }
-        var phraseInput = view.querySelector('#radioIgnorePhrase');
+        var phraseInput = radioMetaById('radioIgnorePhrase');
         if (phraseInput) {
             phraseInput.addEventListener('keydown', function (event) {
                 if (event.key === 'Enter') {

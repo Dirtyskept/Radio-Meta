@@ -297,44 +297,35 @@ internal static class RadioCurrentlyPlayingStationCandidateBuilder
             foreach (var propertyName in propertyNames)
             {
                 var value = ReadString(item, propertyName);
-                if (IsSafePublicHttpUrl(value)) return value;
+                if (IsCredentialFreeHttpUrl(value)) return value;
             }
         }
         return string.Empty;
     }
 
-    private static string ValidateExternalStreamUrl(string value)
+    internal static string ValidateExternalStreamUrl(string value)
     {
         if (string.IsNullOrWhiteSpace(value) || !Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri))
             return string.Empty;
         if (!RadioMetaUriSchemeHelpers.IsHttpHttpsOrIcy(uri))
             return string.Empty;
-        if (!string.IsNullOrEmpty(uri.UserInfo)) return string.Empty;
-        if (uri.Query.IndexOf("api_key", StringComparison.OrdinalIgnoreCase) >= 0 ||
-            uri.Query.IndexOf("access_token", StringComparison.OrdinalIgnoreCase) >= 0 ||
-            uri.Query.IndexOf("emby_token", StringComparison.OrdinalIgnoreCase) >= 0 ||
-            uri.Query.IndexOf("x-emby-token", StringComparison.OrdinalIgnoreCase) >= 0)
-            return string.Empty;
-        var path = uri.AbsolutePath;
-        if (path.StartsWith("/Audio/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/Videos/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/Items/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/emby/", StringComparison.OrdinalIgnoreCase))
+        if (RadioMetaUriSchemeHelpers.HasEmbeddedCredentials(uri)) return string.Empty;
+        if (RadioMetaUriSchemeHelpers.PathStartsWithAny(uri, "/Audio/", "/Videos/", "/Items/", "/emby/"))
             return string.Empty;
         return uri.AbsoluteUri;
     }
 
-    private static bool IsSafePublicHttpUrl(string value)
+    /// <summary>
+    /// Syntactic filter for artwork/logo URLs exposed by Emby playback: HTTP(S), no
+    /// embedded credentials, and not an Emby server path. It does not check that the
+    /// host is public; downloads enforce that separately.
+    /// </summary>
+    private static bool IsCredentialFreeHttpUrl(string value)
     {
         if (string.IsNullOrWhiteSpace(value) || !Uri.TryCreate(value, UriKind.Absolute, out var uri)) return false;
-        if (!RadioMetaUriSchemeHelpers.IsHttpOrHttps(uri) || !string.IsNullOrEmpty(uri.UserInfo)) return false;
-        if (uri.AbsolutePath.StartsWith("/emby/", StringComparison.OrdinalIgnoreCase) ||
-            uri.AbsolutePath.StartsWith("/Items/", StringComparison.OrdinalIgnoreCase) ||
-            uri.AbsolutePath.StartsWith("/Images/", StringComparison.OrdinalIgnoreCase)) return false;
-        return uri.Query.IndexOf("api_key", StringComparison.OrdinalIgnoreCase) < 0 &&
-               uri.Query.IndexOf("access_token", StringComparison.OrdinalIgnoreCase) < 0 &&
-               uri.Query.IndexOf("emby_token", StringComparison.OrdinalIgnoreCase) < 0 &&
-               uri.Query.IndexOf("x-emby-token", StringComparison.OrdinalIgnoreCase) < 0;
+        if (!RadioMetaUriSchemeHelpers.IsHttpOrHttps(uri)) return false;
+        if (RadioMetaUriSchemeHelpers.HasEmbeddedCredentials(uri)) return false;
+        return !RadioMetaUriSchemeHelpers.PathStartsWithAny(uri, "/emby/", "/Items/", "/Images/");
     }
 
     private static string ReadStreamFromStrm(string path)
