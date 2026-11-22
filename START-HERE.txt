@@ -15,4 +15,4 @@ This is the Radio Meta source package, not a compiled DLL.
 5. Back up your working RadioMeta.dll before replacing it.
 6. After installing, press Ctrl+F5 once in each browser.
 
-README.txt describes the package. Logs\CHANGELOG.txt lists every release.
+README.md describes the plugin.
