@@ -1,8 +1,8 @@
 define([], function () {
     'use strict';
 
-    window.__radioMetaDashboardControllerInfo_v1352 = {
-        version: '1.3.152',
+    window.__radioMetaDashboardControllerInfo_v1353 = {
+        version: '1.3.153',
         initialized: true,
         sourceMode: 'bundled-source-sections',
         sections: [
@@ -51,7 +51,7 @@ define([], function () {
         var titleCleanupRulesLoaded = false;
 
         // ---------------------------------------------------------------
-        // Native Emby look (1.3.152). Element lookup, dialogs, confirm and
+        // Native Emby look (1.3.153). Element lookup, dialogs, confirm and
         // alert messages, fields and icons all use Emby's own modules when
         // they are available, and fall back to plain browser equivalents.
         // ---------------------------------------------------------------
@@ -2333,7 +2333,7 @@ define([], function () {
 
                 // Fill a field only from a value the reply actually contains, so a
                 // reply that could not be read never blanks the fields (blank
-                // fields would then be saved by the next Save; fixed in 1.3.152).
+                // fields would then be saved by the next Save; fixed in 1.3.153).
                 function replyHas(pascalName, camelName) {
                     return !!data && typeof data === 'object' &&
                         (data[pascalName] !== undefined || data[camelName] !== undefined);
@@ -2448,7 +2448,7 @@ define([], function () {
         }
 
         // ---------------------------------------------------------------
-        // Tabs (1.3.152). Emby's own header tabs (maintabsmanager), as on
+        // Tabs (1.3.153). Emby's own header tabs (maintabsmanager), as on
         // Emby's admin pages; if that module is not available, the same tabs
         // are shown at the top of the page. The selected tab is kept in the
         // page address (&tab=...), so Back and reloading keep it.
@@ -3145,7 +3145,7 @@ define([], function () {
 
             var checks = [];
             var startedAt = new Date();
-            var dashboardControllerInfo = window.__radioMetaDashboardControllerInfo_v1352;
+            var dashboardControllerInfo = window.__radioMetaDashboardControllerInfo_v1353;
             diagnosticAddCheck(checks,
                 dashboardControllerInfo && dashboardControllerInfo.initialized === true ? 'PASS' : 'WARN',
                 'Dashboard controller bundle',
@@ -3253,7 +3253,7 @@ define([], function () {
 
                 var localPlayerItemId = '';
                 try {
-                    var bridgeForSessionMatch = window.__radioMetaPlayerIntegration1352;
+                    var bridgeForSessionMatch = window.__radioMetaPlayerIntegration1353;
                     var bridgePlayer = bridgeForSessionMatch && bridgeForSessionMatch.modules &&
                         bridgeForSessionMatch.modules.currentPlayer && bridgeForSessionMatch.modules.currentPlayer.get();
                     var bridgeItem = bridgePlayer && bridgeForSessionMatch.modules.playbackManager &&
@@ -3465,7 +3465,7 @@ define([], function () {
                     var bridgeLookupWindow = window;
                     for (var bridgeLookupDepth = 0; bridgeLookupDepth < 5; bridgeLookupDepth++) {
                         try {
-                            browserPlayerBridge = bridgeLookupWindow.__radioMetaPlayerIntegration1352 || null;
+                            browserPlayerBridge = bridgeLookupWindow.__radioMetaPlayerIntegration1353 || null;
                             if (browserPlayerBridge || !bridgeLookupWindow.parent || bridgeLookupWindow.parent === bridgeLookupWindow) break;
                             bridgeLookupWindow = bridgeLookupWindow.parent;
                         } catch (_) {

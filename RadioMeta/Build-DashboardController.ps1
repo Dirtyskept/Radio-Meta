@@ -43,7 +43,7 @@ $content = $content -replace "`r`n", "`n"
 $content = $content -replace "`r", "`n"
 
 foreach ($required in @(
-    "__radioMetaDashboardControllerInfo_v1352",
+    "__radioMetaDashboardControllerInfo_v1353",
     "function scanStationFolder(completionNote, stationOperationData)",
     "function runRadioMetaDiagnostics()",
     "function addCurrentlyPlayingStationToForm()",

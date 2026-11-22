@@ -13,11 +13,11 @@ namespace RadioMeta;
 /// </remarks>
 internal static class RadioMetaBuildInfo
 {
-    /// <summary>Three-part plugin version, for example "1.3.152".</summary>
+    /// <summary>Three-part plugin version, for example "1.3.153".</summary>
     internal static readonly string Version =
         typeof(RadioMetaBuildInfo).Assembly.GetName().Version?.ToString(3) ?? "unknown";
 
-    /// <summary>Builds a User-Agent value such as "RadioMeta/1.3.152 artwork-fetch".</summary>
+    /// <summary>Builds a User-Agent value such as "RadioMeta/1.3.153 artwork-fetch".</summary>
     internal static string UserAgent(string? purpose = null) =>
         string.IsNullOrWhiteSpace(purpose)
             ? "RadioMeta/" + Version

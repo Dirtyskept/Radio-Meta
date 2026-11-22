@@ -419,7 +419,7 @@ public sealed class RadioMetaEntryPoint : IServerEntryPoint
 
         _plugin.MemoryDiagnostics.Start();
 
-        // Settings saves go to the Emby log too (1.3.152). Whether the station
+        // Settings saves go to the Emby log too (1.3.153). Whether the station
         // folder is set at start-up is already logged below ("configuration loaded").
         _plugin.SettingsSaveEvents.Logger = _logger;
         _plugin.EmbyLogger = _logger;

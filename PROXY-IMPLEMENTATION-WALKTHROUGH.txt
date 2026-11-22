@@ -1,0 +1,92 @@
+RADIO META — PROXY IMPLEMENTATION WALKTHROUGH
+========================================
+
+Purpose
+-------
+The opt-in FFmpeg proxy is intended for selected Internet-radio .strm sources
+that Emby's normal direct-play handling cannot play. It was first tested with a
+Live365 MP3-style stream. Provider, protocol, and codec support must be tested;
+this is not a universal stream converter.
+
+1. Opt in per station
+---------------------
+- In the New station dialog, the “Play through the Radio Meta proxy” switch is
+  sent as UseProxy in the create API.
+- Each station's edit dialog (Stations tab) has the same switch, which acts at
+  once. It operates on that station only and does not recreate its artwork.
+- Toggling the switch rewrites the .strm URL, then requests a targeted Emby
+  library refresh and rescans the Radio Meta station folder.
+
+2. Sidecar stores the upstream URL and token
+--------------------------------------------
+The plugin writes a sibling file named by changing the .strm extension to
+.radiometa-proxy.json. It stores the original HTTP(S) UpstreamUrl and a random
+32-character hexadecimal Token. The sidecar lets Radio Meta resolve the source
+URL after the .strm is rewritten to point at the local proxy. Reads are capped at
+16 KB; tokens and source URLs are validated before use.
+
+3. .strm endpoint and binding
+-----------------------------
+A proxy-enabled .strm contains a URL in this form:
+http://127.0.0.1:18741/proxy/<32-character-token>
+The listener binds to loopback (127.0.0.1), fixed port 18741. It is intentionally
+not exposed as a public relay. Correct playback relies on Emby handling this URL
+from the server's local context, as in the tested setup.
+
+4. FFmpeg process
+-----------------
+RadioMetaEntryPoint starts RadioMetaProxyService when Emby starts and the
+configured Station Folder is available, or later when Path settings are saved
+with a Station Folder that exists. FFmpeg lookup checks beside the configured FFprobe program,
+then the application base folder, then the executable name through PATH.
+For a GET, the proxy maps the token to a sidecar and starts one FFmpeg process.
+FFmpeg reads the upstream stream and uses audio stream copy (-c:a copy) with an
+MP3 output container (-f mp3); it does not re-encode the audio. Consequently,
+MP3-compatible sources are the primary target. HLS, AAC-incompatible muxing,
+provider authentication, special headers and other containers are not guaranteed.
+
+5. Limits and cleanup
+---------------------
+- Maximum 8 concurrent proxy clients and 4 concurrent FFmpeg processes.
+- Request headers are capped at 8 KB and must arrive within 5 seconds.
+- The proxy waits for first audio for at most 20 seconds before committing the
+  successful audio response.
+- FFmpeg standard error is drained but not written raw to logs, to avoid exposing
+  credential-bearing URLs. FFmpeg runs with -nostats (no progress lines).
+- Audio passes through one fixed 32 KB buffer; nothing accumulates in Emby.
+- The player's connection is watched while FFmpeg runs: when the player
+  disconnects, its FFmpeg process is stopped at once, even while the upstream
+  is stalled. Errors also stop the request's FFmpeg process.
+- Client tasks are tracked during listener shutdown. Separate clients do not share
+  an FFmpeg session; this avoids shared-session ownership complexity but consumes
+  one process per active proxy playback.
+
+6. Enabling/disabling and editing
+--------------------------------
+Enabling proxy reads the existing direct URL, writes a sidecar/token, then
+rewrites the .strm URL. Disabling proxy restores the upstream URL from the sidecar
+into the .strm and then removes the sidecar. A successful toggle requests the same
+targeted Emby library refresh used by Create .strm.
+
+The normal station edit form intentionally disables station name, stream URL,
+logo URL, and Save changes while proxy is on. The API enforces the same rule to
+prevent partial .strm/sidecar edits. Uncheck proxy, wait for the station-list
+refresh, reopen Edit, make changes, save, then enable proxy again if needed.
+
+Key files
+---------
+- RadioMeta/RadioMetaProxyService.cs — loopback listener, token lookup, FFmpeg
+- RadioMeta/RadioStationManagerService.Proxy.cs — per-station toggle API
+- RadioMeta/RadioStationManagerService.Mutations.cs — create/edit/delete flows
+- RadioMeta/RadioStationManagerService.Scan.cs — identifies proxy stations and
+  returns the upstream URL to the dashboard instead of exposing the local URL
+- RadioMeta/RadioStationFileStore.cs — safe .strm and bounded artwork file I/O
+- RadioMeta/WebUI/RadioMetaDashboard.html — the New station proxy switch
+- RadioMeta/WebUI/DashboardSections/02-Station-Folder-Panel.js.part — per-station
+  switch, edit lock, and refresh handling
+- RadioMeta/WebUI/DashboardSections/08-View-Lifecycle-And-Station-Creation.js.part
+  — create request, proxy opt-in and library refresh
+- RadioMeta/Plugin.cs — starts/stops the proxy with the plugin entry point
+
+This document describes code structure and intended behavior; it is not a
+statement that every upstream provider/codec or client topology is supported.

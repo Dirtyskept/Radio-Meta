@@ -6,7 +6,7 @@ using MediaBrowser.Model.Logging;
 namespace RadioMeta;
 
 /// <summary>
-/// Writes one Emby log line per added or removed metadata rule (1.3.152), with
+/// Writes one Emby log line per added or removed metadata rule (1.3.153), with
 /// the rule itself, so a rule deleted by mistake can be read back from the Emby
 /// server log. A changed rule shows as removed (old) and added (new). Rules hold
 /// station names, device names and title text only; no paths, addresses or tokens.

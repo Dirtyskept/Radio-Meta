@@ -5,29 +5,39 @@
     <Nullable>enable</Nullable>
     <AssemblyName>RadioMeta</AssemblyName>
     <RootNamespace>RadioMeta</RootNamespace>
-    <Version>1.3.152</Version>
-    <AssemblyVersion>1.3.152.0</AssemblyVersion>
-    <FileVersion>1.3.152.0</FileVersion>
-    <InformationalVersion>1.3.152</InformationalVersion>
+    <Version>1.3.153</Version>
+    <AssemblyVersion>1.3.153.0</AssemblyVersion>
+    <FileVersion>1.3.153.0</FileVersion>
+    <InformationalVersion>1.3.153</InformationalVersion>
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- Override with -p:EmbySystemDir=/path/to/EmbyServer/system on hosts
-         where Emby's server assemblies are not under the default Windows path. -->
+    <!-- ===== THE ONE LINE TO CHANGE =====
+         The folder with the Emby assemblies Radio Meta is compiled against
+         (MediaBrowser.Common/Controller/Model.dll). Relative to this file, or a full path.
+         Use the OLDEST Emby you support: the DLL then loads on that Emby and newer ones;
+         a DLL built against a newer Emby does not load on older Emby versions.
+         These assemblies are only compiled against, never shipped. -->
+    <EmbyReferencePath Condition="'$(EmbyReferencePath)' == ''">EmbyReferences\4.10.2</EmbyReferencePath>
+
+    <!-- Test builds against the installed Emby: -p:UseInstalledEmby=true
+         (uses -p:EmbySystemDir, default %APPDATA%\Emby-Server\system). Don't release those. -->
     <EmbySystemDir Condition="'$(EmbySystemDir)' == '' and '$(APPDATA)' != ''">$(APPDATA)\Emby-Server\system</EmbySystemDir>
+    <RadioMetaEmbyDir Condition="'$(UseInstalledEmby)' == 'true'">$(EmbySystemDir)</RadioMetaEmbyDir>
+    <RadioMetaEmbyDir Condition="'$(UseInstalledEmby)' != 'true'">$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(EmbyReferencePath)'))</RadioMetaEmbyDir>
   </PropertyGroup>
 
   <ItemGroup>
     <Reference Include="MediaBrowser.Common">
-      <HintPath>$(EmbySystemDir)\MediaBrowser.Common.dll</HintPath>
+      <HintPath>$(RadioMetaEmbyDir)\MediaBrowser.Common.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="MediaBrowser.Controller">
-      <HintPath>$(EmbySystemDir)\MediaBrowser.Controller.dll</HintPath>
+      <HintPath>$(RadioMetaEmbyDir)\MediaBrowser.Controller.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="MediaBrowser.Model">
-      <HintPath>$(EmbySystemDir)\MediaBrowser.Model.dll</HintPath>
+      <HintPath>$(RadioMetaEmbyDir)\MediaBrowser.Model.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
@@ -38,6 +48,15 @@
     <EmbeddedResource Include="WebUI\RadioMetaPlayerIntegration.js" />
     <EmbeddedResource Include="thumb.jpg" LogicalName="RadioMeta.thumb.jpg" />
   </ItemGroup>
+
+  <!-- Stop with a clear message instead of failing on missing references, and say which
+       Emby the DLL is built against. -->
+  <Target Name="CheckRadioMetaEmbyReferences" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(RadioMetaEmbyDir)\MediaBrowser.Common.dll') or !Exists('$(RadioMetaEmbyDir)\MediaBrowser.Model.dll') or !Exists('$(RadioMetaEmbyDir)\MediaBrowser.Controller.dll')"
+           Text="Radio Meta: the Emby assemblies (MediaBrowser.Common/Controller/Model.dll) are not in $(RadioMetaEmbyDir). Copy them from that Emby's system folder (see EmbyReferences\README.txt), or change EmbyReferencePath in RadioMeta.csproj." />
+    <Message Importance="high" Condition="'$(UseInstalledEmby)' != 'true'" Text="Radio Meta: building against the Emby assemblies in $(RadioMetaEmbyDir)" />
+    <Message Importance="high" Condition="'$(UseInstalledEmby)' == 'true'" Text="Radio Meta: TEST BUILD against the installed Emby in $(RadioMetaEmbyDir). It may not load on older Emby versions; don't release it." />
+  </Target>
 
   <Target Name="BuildRadioMetaDashboardControllerBundle" BeforeTargets="PrepareResources">
     <!-- Build the dashboard controller from source sections before embedding the existing resource. -->

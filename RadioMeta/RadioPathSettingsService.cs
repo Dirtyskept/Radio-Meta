@@ -57,7 +57,7 @@ public sealed class RadioPathSettingsService : IService, IRequiresRequest
         configuration.EnableAdaptiveMetadataRouting = request.EnableAdaptiveMetadataRouting ?? previousAdaptiveRouting;
         configuration.EnableStationsOutsideFolder = request.EnableStationsOutsideFolder ?? previousOutsideFolder;
 
-        // Recorded for Diagnostics and the Emby log (1.3.152): which device saved,
+        // Recorded for Diagnostics and the Emby log (1.3.153): which device saved,
         // and whether each path was set, changed, cleared or left alone.
         var saveEvent = new RadioMetaSettingsSaveEventDto
         {

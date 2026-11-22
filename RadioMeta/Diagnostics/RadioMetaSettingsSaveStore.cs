@@ -18,7 +18,7 @@ public sealed class RadioMetaSettingsSaveEventDto
 }
 
 /// <summary>
-/// Records each Settings save (1.3.152), so a station folder or FFprobe path that
+/// Records each Settings save (1.3.153), so a station folder or FFprobe path that
 /// was cleared can be traced to the save, time and device that did it. Paths are
 /// not stored: only whether each was set, changed, cleared or left unchanged.
 /// Kept in memory (shown in Diagnostics) and written as one line to the Emby

@@ -1,0 +1,9 @@
+Radio Meta v1.3.153 Mainline Source
+
+Builds against the oldest supported Emby (4.10.2) instead of whichever Emby is
+installed on the build machine, so one DLL loads on Emby 4.10.2 and newer
+versions. The Emby assemblies go in RadioMeta\EmbyReferences\4.10.2 once (see
+the README there); the folder is set by one line in RadioMeta.csproj. No
+change to what the plugin does. Everything in v1.3.152 is retained.
+
+See Logs\CHANGELOG.txt for details.

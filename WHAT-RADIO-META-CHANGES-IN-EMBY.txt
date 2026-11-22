@@ -1,0 +1,170 @@
+WHAT RADIO META CHANGES IN EMBY
+================================
+
+Short version
+-------------
+Radio Meta changes exactly one Emby file: the web app's start page,
+    <Emby>\system\dashboard-ui\index.html
+(on a typical Windows install: %APPDATA%\Emby-Server\system\dashboard-ui\index.html).
+
+It keeps one small, clearly marked block of script in that file. It adds the
+block when Emby starts and the block is missing, and removes it only when Radio
+Meta is uninstalled. Nothing else in Emby is changed: no other web files, no
+Emby DLLs, no player modules, no registry settings, and nothing is patched in
+the Emby server's memory.
+
+The player script that block loads does change how Emby's web player behaves
+while a page is open in a browser (for example, it shows the song in place of
+the station name). Everything it changes there is listed in the companion file
+WHAT-RADIO-META-CHANGES-IN-THE-WEB-PLAYER.txt, next to this one. None of it is
+saved, and all of it is undone when the page is closed.
+
+Radio Meta's own data (settings, history, diagnostics) is kept in Emby's
+plugin configuration and data folders, which are the places Emby provides for
+plugins.
+
+Why this is needed
+------------------
+Emby's web player loads a station's details once when you press play and does
+not look again. To show the live song and artist in the mini-player, the full
+player and Dashboard Now Playing, some code has to run inside the web page.
+Emby has no supported way for a plugin to add a script to its web app, so Radio
+Meta adds one reference to the page itself. Other Emby and Jellyfin add-ons use
+the same approach.
+
+Earlier versions (up to 1.3.125) used WebLoader, which replaced Emby files.
+Since 1.3.127, Radio Meta adds one marked block instead and replaces nothing.
+
+Exactly what is added
+---------------------
+The block is placed just before the closing </body> tag. This is the complete
+block, exactly as Radio Meta writes it (indented here by four spaces for
+reading; in the file it starts at the left edge):
+
+    <!-- BEGIN RADIOMETA DLL PLAYER INTEGRATION -->
+    <script data-radiometa-player-integration-bootstrap>
+    (function (w) {
+        // Radio Meta: load its player script (embedded in RadioMeta.dll) once Emby is ready.
+        var tries = 0;
+        (function load() {
+            if (w.__radioMetaPlayerBootstrap) return;
+            if (!w.Emby || !w.Emby.importModule || !w.require) {
+                if (++tries <= 120) w.setTimeout(load, 250); // wait up to 30 seconds
+                return;
+            }
+            w.__radioMetaPlayerBootstrap = true;
+            w.Emby.importModule('./modules/common/pluginmanager.js').then(function (m) {
+                m = m && m.default ? m.default : m;
+                return w.require([m.getConfigurationResourceUrl('RadioMetaPlayerIntegration.js')]);
+            }).catch(function (e) { console.error('Radio Meta: player script not loaded', e); });
+        })();
+    })(window);
+    </script>
+    <!-- END RADIOMETA DLL PLAYER INTEGRATION -->
+
+The block has no version number, so it is the same in every Radio Meta
+release. Updating Radio Meta doesn't change index.html. (The one exception was
+the release that shortened the block from about 60 lines to the version above,
+with the same behaviour; its first start replaced the longer block once.)
+
+The script in that block does only this:
+1. Waits for the Emby web app to finish loading (it gives up after 30 seconds).
+2. Asks Emby's own plugin manager for the address of
+   RadioMetaPlayerIntegration.js. That script is stored inside RadioMeta.dll
+   and served by your Emby server. Nothing is loaded from the internet.
+3. Loads that script.
+
+The rest of index.html is left exactly as it was, including its line endings.
+The file is saved as UTF-8.
+
+What the player script does in your browser
+-------------------------------------------
+In short: it reads your playback sessions, gets the current song from your own
+server, and shows song and artist in the mini-player, the big player and
+Dashboard Now Playing. It contacts no other servers and stores nothing in the
+browser. The full list, including the two Emby functions it wraps in the page,
+is in WHAT-RADIO-META-CHANGES-IN-THE-WEB-PLAYER.txt.
+
+It only affects the Emby web app in a browser. Emby's own phone, TV and desktop
+apps don't use this file and aren't changed.
+
+When the file is written
+------------------------
+- Emby starts: in the background, so Emby's start-up isn't delayed, Radio Meta
+  checks index.html. If its block is already there and correct, it does
+  nothing. Otherwise it adds the block, or replaces an older Radio Meta block in
+  the same place, so there is never more than one.
+- About half a second later it checks the block is still there, and writes it
+  again if another program removed it (at most three times).
+- Emby shuts down or restarts: nothing is changed. The block stays, so a
+  browser that loads the page while Emby restarts still gets it.
+- Radio Meta is uninstalled: just before Emby deletes RadioMeta.dll, Radio Meta
+  removes its block, and the file goes back to how Emby shipped it.
+- Emby is updated: Emby replaces the whole dashboard-ui folder, which removes
+  the block. Radio Meta adds it again on the next start.
+
+So in normal use index.html is written once after installing Radio Meta, and
+once after each Emby update.
+
+How the file is written safely
+------------------------------
+- Other plugins can also write to index.html (for example Top Songs). They all
+  take the same system-wide lock, named Global\EmbyDashboardIndexWrite, before
+  changing the file, so two plugins never write it at the same moment. If the
+  lock isn't released within 10 seconds, Radio Meta goes on without it.
+- Radio Meta reads the file again just before saving. If it changed in the
+  meantime, it starts over with the new content, so it never overwrites another
+  plugin's change.
+- It writes the new version to a temporary file in the same folder
+  (.radiometa-index-<random>.tmp), then swaps it in place of index.html and
+  deletes the temporary file. A crash can't leave a half-written page.
+- If the file is briefly in use (a virus scan, say), it waits a moment and
+  tries again.
+- It only ever changes the text between its own BEGIN and END RADIOMETA lines.
+
+When Radio Meta leaves the file alone
+-------------------------------------
+Radio Meta does not touch index.html, and writes a warning to the Emby log,
+if:
+- the file doesn't exist;
+- it has no closing </body> tag;
+- it finds a BEGIN marker without the matching END marker (someone has edited
+  the block by hand).
+If Emby isn't allowed to write to that folder, Radio Meta logs an error and
+skips it.
+In all of these cases, everything else in Radio Meta keeps working. Only the
+live song and artist in the web players are missing.
+
+If the page doesn't show song and artist
+----------------------------------------
+After installing or updating Radio Meta, or updating Emby, the browser may
+still have the old copy of the page or of the player script. From 1.3.142 on,
+Radio Meta shows a short message when this happens. Reload once with Ctrl+F5 (on a phone, close and reopen
+the browser tab).
+
+If RadioMeta.dll is deleted by hand
+-----------------------------------
+If the DLL is deleted without uninstalling Radio Meta in Emby, the block stays
+in index.html until the next Emby update replaces the file. It does nothing
+visible: it can't find the player script and writes one error line to the
+browser console. To remove it by hand, stop Emby, open index.html in a text
+editor, delete everything from the BEGIN RADIOMETA line to the END RADIOMETA
+line, and save.
+
+How to check it
+---------------
+- Radio Meta Dashboard > Diagnostics > "Native player integration deployment"
+  shows whether the block is installed and the last install status.
+- The Emby server log has a Radio Meta line each time the block is added or
+  removed, for example:
+    "Radio Meta <version> installed its DLL-managed player bootstrap ..."
+    "Radio Meta removed its DLL-managed player integration reference from the
+     dashboard index during uninstall."
+  There is no line when the block was already correct.
+- Open index.html in a text editor and search for RADIOMETA.
+
+Source
+------
+All of this is in RadioMeta\RadioMetaPlayerIntegration.cs (adding and removing
+the block), RadioMeta\Plugin.cs (OnUninstalling) and
+RadioMeta\WebUI\RadioMetaPlayerIntegration.js (the player script).

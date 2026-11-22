@@ -25,7 +25,7 @@
         var titleCleanupRulesLoaded = false;
 
         // ---------------------------------------------------------------
-        // Native Emby look (1.3.152). Element lookup, dialogs, confirm and
+        // Native Emby look (1.3.153). Element lookup, dialogs, confirm and
         // alert messages, fields and icons all use Emby's own modules when
         // they are available, and fall back to plain browser equivalents.
         // ---------------------------------------------------------------

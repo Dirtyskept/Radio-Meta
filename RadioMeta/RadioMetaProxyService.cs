@@ -401,7 +401,7 @@ internal sealed class RadioMetaProxyService : IDisposable
                 };
                 var args = process.StartInfo.ArgumentList;
                 args.Add("-hide_banner"); args.Add("-loglevel"); args.Add("warning"); args.Add("-nostdin");
-                // No progress lines on stderr (1.3.152): they were only read and discarded.
+                // No progress lines on stderr (1.3.153): they were only read and discarded.
                 args.Add("-nostats");
                 args.Add("-reconnect"); args.Add("1"); args.Add("-reconnect_streamed"); args.Add("1"); args.Add("-reconnect_delay_max"); args.Add("5");
                 // Restrict FFmpeg to network protocols so an upstream redirect or playlist cannot
@@ -421,7 +421,7 @@ internal sealed class RadioMetaProxyService : IDisposable
                     // FFmpeg diagnostics can contain credential-bearing upstream URLs.
                     try { while (await process.StandardError.ReadLineAsync(linked.Token).ConfigureAwait(false) is not null) Interlocked.Increment(ref stderrLineCount); } catch { }
                 });
-                // Watch the player's connection while FFmpeg runs (1.3.152). A player sends
+                // Watch the player's connection while FFmpeg runs (1.3.153). A player sends
                 // nothing after its request, so a read that ends means it disconnected. Without
                 // this, a disconnect during an upstream stall was only noticed at the next write,
                 // leaving FFmpeg running and holding a proxy slot until the upstream recovered.

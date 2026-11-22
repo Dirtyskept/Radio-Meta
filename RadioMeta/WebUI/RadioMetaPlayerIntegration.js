@@ -1,7 +1,7 @@
 /* AMD resource loaded through Emby's plugin-resource URL helper and module loader. */
 define([], function () {
 /*
- * Radio Meta 1.3.152 DLL-embedded Emby player integration.
+ * Radio Meta 1.3.153 DLL-embedded Emby player integration.
  *
  * This integration does not patch Emby's nowplayingbar.js or any other player
  * module. The plugin DLL adds one reversible inline bootstrap to the Emby
@@ -28,8 +28,8 @@ define([], function () {
 (function () {
     "use strict";
 
-    var GLOBAL_KEY = "__radioMetaPlayerIntegration1352";
-    var SCRIPT_VERSION = "1.3.152";
+    var GLOBAL_KEY = "__radioMetaPlayerIntegration1353";
+    var SCRIPT_VERSION = "1.3.153";
     if (window[GLOBAL_KEY]) return;
 
     var state = {
@@ -82,8 +82,8 @@ define([], function () {
 
     function log(message, detail) {
         try {
-            if (detail === undefined) console.info("Radio Meta 1.3.152: " + message);
-            else console.info("Radio Meta 1.3.152: " + message, detail);
+            if (detail === undefined) console.info("Radio Meta 1.3.153: " + message);
+            else console.info("Radio Meta 1.3.153: " + message, detail);
         } catch (_) { }
     }
 
@@ -91,7 +91,7 @@ define([], function () {
         var text = String(error && error.message ? error.message : error || "Unknown error");
         if (text === state.lastError) return;
         state.lastError = text;
-        console.warn("Radio Meta 1.3.152: " + message + " (" + text.slice(0, 180) + ")");
+        console.warn("Radio Meta 1.3.153: " + message + " (" + text.slice(0, 180) + ")");
     }
 
     function moduleDefault(moduleValue) {
@@ -770,7 +770,7 @@ define([], function () {
 
     // Radio Meta's two wrappers (the display event above and getPlaylist below)
     // live only in this page. Browsers can fire pagehide and keep the page
-    // running (back/forward cache, a frozen or restored tab), and before 1.3.152
+    // running (back/forward cache, a frozen or restored tab), and before 1.3.153
     // Radio Meta removed both wrappers then and never put them back, so the
     // players showed the station title for the rest of the page. On each poll,
     // put back a wrapper that is missing (Emby's original is in place again).
@@ -1426,5 +1426,5 @@ define([], function () {
     }, 500);
 }());
 
-    return { version: "1.3.152" };
+    return { version: "1.3.153" };
 });

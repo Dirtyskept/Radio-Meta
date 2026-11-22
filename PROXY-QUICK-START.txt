@@ -1,0 +1,45 @@
+RADIO META PROXY — QUICK START
+==============================
+
+What the proxy does
+-------------------
+The optional per-station proxy helps when a client cannot play a station stream directly. Instead of putting the station's upstream URL in the .strm file, Radio Meta places a local loopback proxy address there. The original stream URL and a random station token are kept in a companion .radiometa-proxy.json file. When playback begins, Radio Meta starts FFmpeg to read the original stream and repackage the audio into an MP3 container without re-encoding the audio.
+
+Direct playback is the default. Only stations where you explicitly turn on “Use proxy” are proxied.
+
+Before you start
+----------------
+- Build and install Radio Meta from the source ZIP using the included README build instructions.
+- Configure a real, fixed Station Folder. The proxy cannot be enabled when the station folder is blank/automatic or unavailable.
+- FFmpeg must be available to the Emby server process. FFprobe and FFmpeg are separate executables; having FFprobe alone does not mean FFmpeg is installed.
+- The primary tested target is an HTTP(S) live audio stream that FFmpeg can copy into an MP3 output container. Other formats/providers require testing.
+
+Create a new proxied station
+----------------------------
+1. Open Radio Meta in the Emby dashboard, Stations tab.
+2. Select New station and enter the station name and upstream stream address.
+3. Turn on “Play through the Radio Meta proxy”.
+4. Select Create station and wait for the station list/library refresh feedback.
+5. Play the station from an Emby client and verify playback and metadata behavior.
+
+Proxy an existing station
+-------------------------
+1. On the Stations tab, select the station's edit icon.
+2. Turn on “Play through the Radio Meta proxy” in the edit dialog. Radio Meta changes the .strm content and creates the sidecar; a targeted library refresh is requested.
+3. To edit the station name, stream URL, or logo afterward, disable the proxy first. Wait for the station list to refresh, reopen Edit, make the changes, save, and re-enable the proxy if needed.
+4. To return to direct playback, turn the proxy off. Radio Meta restores the upstream URL from the sidecar, removes the sidecar, and requests a library refresh.
+
+What changes on disk
+--------------------
+- The .strm file points to the local Radio Meta proxy only when proxy is enabled.
+- The sibling .radiometa-proxy.json sidecar contains the upstream URL and random station token. Do not publish or share that sidecar; it contains sensitive connection details.
+- When proxy is disabled, Radio Meta restores the upstream URL to the .strm file and removes the sidecar.
+
+Important limitations
+---------------------
+- The proxy binds to loopback (127.0.0.1) on the Emby server. It is intended for the tested server/client arrangement; it is not a network-wide proxy listening on all interfaces.
+- Each active proxied playback request uses its own FFmpeg process. The current limits are 8 clients and 4 concurrent FFmpeg processes.
+- FFmpeg uses audio stream copy and an MP3 output container. Certain AAC streams, HLS playlists, unusual providers, authentication requirements, custom headers, or formats that cannot be placed in the MP3 container may not work.
+- StationOnly metadata rules still mean “do not look for song metadata”; the proxy handles audio transport and does not enable metadata lookup for such a station.
+
+For problems, use PROXY-TROUBLESHOOTING.txt. Do not manually edit the sidecar unless you understand the relationship between it and the .strm file; if the two disagree, use the diagnostic report before changing anything.

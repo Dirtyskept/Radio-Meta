@@ -1,0 +1,95 @@
+WHAT RADIO META CHANGES IN THE EMBY WEB PLAYER
+==============================================
+
+Companion to WHAT-RADIO-META-CHANGES-IN-EMBY.txt.
+
+That file covers the one Emby file Radio Meta changes on disk
+(system\dashboard-ui\index.html). No other Emby file is changed: no web
+files, no player modules, no DLLs, no registry settings.
+
+This file lists everything Radio Meta's player script changes inside the Emby
+web app while a page is open in a browser. All of it lives only in that open
+page. It is undone when the page is closed or reloaded, nothing is saved in the
+browser, and nothing is written back to Emby. The script is
+RadioMeta\WebUI\RadioMetaPlayerIntegration.js, embedded in RadioMeta.dll.
+
+
+1. What it reads
+----------------
+- Your playback sessions, through Emby's own API connection, signed in as
+  you. Every 2.5 seconds while the page is visible, every 6 seconds while it
+  is hidden.
+- /RadioMeta/MyCurrentTracks on your server, only when the session doesn't
+  already carry the song. It returns your own sessions only (an admin sees
+  all).
+- /RadioMeta/MyCurrentTracks once per page load, a few seconds after the page
+  opens, to learn the server's Radio Meta version.
+- Emby's artist search (/Artists), to find the playing artist in your library
+  so the name can be clicked. Results are kept in memory for 10 to 30
+  minutes.
+No other server is contacted.
+
+
+2. The playing station's item, in memory
+----------------------------------------
+While a station plays, Radio Meta changes two fields of the station's item in
+the page:
+- Name becomes the song title;
+- ArtistItems becomes the artist (with its library Id when found).
+The lock screen, CarPlay and the mini-player read these fields. Radio Meta
+saves the original values first and puts them back when the station stops or
+another item plays. Image fields (logo, artwork) are never touched.
+
+
+3. Two Emby functions, wrapped in the page
+------------------------------------------
+- Emby's event signal (events.trigger). Radio Meta looks at display updates
+  as they pass through, so it can:
+  - put the song into the copy the players draw from;
+  - notice a station change and clear the previous song at once;
+  - remember each player's last display update, so a new song can be redrawn
+    without a full player refresh.
+  Every event is still delivered to Emby exactly as before.
+- PlaybackManager.getPlaylist, which the big player's play-queue list uses.
+  For the playing item and Radio Meta's active station, the list gets a copy
+  with the station's own name. That keeps station names in the list and stops
+  it flickering. Other entries are passed through unchanged.
+Both wrappers end when the page is closed or reloaded. Radio Meta doesn't
+remove them while the page is open: if one goes missing (Emby's original is
+back), Radio Meta puts it back on its next check, within 2.5 seconds.
+
+
+4. Signals Radio Meta sends to Emby's players
+---------------------------------------------
+- With the big player closed: Emby's normal "player state changed" signal
+  (statechange), the same one Emby sends when a track starts. The mini-player,
+  lock screen and CarPlay update from it.
+- With the big player open: instead, each player's last display update is
+  repeated with the new song, so Emby doesn't refresh and scroll the whole
+  play-queue list. That repeat is marked as an "initial request", which only
+  tells the big player to keep its logo, backdrop and header logo (they belong
+  to the station, which hasn't changed). The lock screen and CarPlay pick the
+  song up from Emby's next time update.
+
+
+5. Text on screen
+-----------------
+- Big player: the station name in the third line (Emby's album line). While
+  a station waits for its first song, the artist and station lines are kept
+  in place with invisible text, so the layout doesn't jump. On a station
+  change, the previous song's text is cleared at once.
+- Dashboard Now Playing: song, artist and station in the card's three rows.
+- Mini-player: only through the item fields and signals above; its own page
+  elements are never touched.
+
+
+6. A message
+------------
+If the page is still running an older cached copy of this script than the
+server's Radio Meta, Emby's own short pop-up message asks you to press Ctrl+F5
+(on a phone, close and reopen the tab). Nothing reloads by itself.
+
+
+Emby's own phone, TV and desktop apps don't load this script and aren't
+affected. The source code for everything above is in
+RadioMeta\WebUI\RadioMetaPlayerIntegration.js.

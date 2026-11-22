@@ -1,0 +1,32 @@
+RADIO META — PERSISTENT ADAPTIVE ROUTING STATE XML
+
+FILE LOCATION
+- `RadioMetaAdaptiveRoutingState.xml` is created next to the existing Radio Meta plugin configuration XML, in Emby's plugin-config directory.
+- This is separate from `8a7f6e31-9d42-4b85-a103-72c6f0e54b19.xml`; do not rename or replace the main plugin configuration.
+- The state XML stores local .strm station file paths, not stream URLs, stream credentials, or API tokens.
+
+WHAT IS PERSISTED
+- Per-station source preference (Shoutcast or ICY), consecutive speed-loss counts, preferred-source misses, parallel-recheck interval and progress, consecutive confirming rechecks, last route outcome, and timestamps.
+- Per station and per endpoint (`stats` or `7.html`): failure count, backoff stage, lookups remaining before the next transient retry, automatic block status, HTTP status, eligible lookup progress toward recovery, next recovery time, and last outcome.
+- The XML is written with a same-directory temporary file and replacement. Routine lookup counters are checkpointed after a small number of state mutations; state transitions are written immediately. A sudden power loss can lose only the most recent uncheckpointed counter increments, not clear the stored route preference or restart the backoff from zero.
+
+RETRY POLICY
+- Transient errors, timeouts, malformed or empty responses use 10, 20, 40, then 80 *uncached eligible station lookups* between retries. Repeated failures remain at 80 until a useful response clears the failure history.
+- HTTP 404, 410, and 405 are treated as unsupported endpoint responses and are automatically blocked for regular requests. A recovery probe is attempted only after **both** 24 hours and 320 uncached eligible lookups have passed.
+- A successful `/stats` response resets only that station's `/stats` state; `/7.html` remains independent. Successful automatic recovery removes the recovered endpoint's automatic entry.
+- Learned source preferences recheck in parallel initially every 10 uncached lookups. After two consecutive successful confirmations, the recheck interval widens to 20, 40, and 80. A failed recheck or repeated preferred-source misses resets the interval/learning according to the route logic.
+
+MANUAL ENDPOINT BLOCK
+The file has an `Endpoints` element. To manually block a problematic endpoint, stop Emby and edit the XML. Use the full path to the station's `.strm` file and either `stats` or `7.html`:
+
+    <Endpoint stationPath="C:\Path\To\Station.strm" endpoint="stats" manualBlock="true" />
+
+If an `Endpoint` element already exists for the same `stationPath` and `endpoint`, edit that element's `manualBlock` attribute to `true` instead of adding a duplicate. If no matching element exists, add one under `Endpoints`. Use XML escaping for any ampersand in a path (write `&amp;` instead of `&` inside an attribute).
+
+- Manual blocks are permanent until the matching Endpoint element is removed or `manualBlock` is changed to `false`.
+- After editing, save the file and restart Emby. Do not edit while Emby is running; the plugin holds an in-memory copy and periodic writes could overwrite live edits.
+- To unblock, stop Emby and remove the manual Endpoint element. Restart Emby; the endpoint becomes eligible for normal testing again.
+- If an entry is manually blocked, manualBlock takes precedence over automatic block and retry state.
+
+DIAGNOSTICS
+The dashboard diagnostic reports counts only: saved station preferences, persisted endpoint state count, automatic/manual blocks, transient retries, recovery-ready endpoints, persistence health, and last save time. It deliberately omits all station paths and stream URLs. If the diagnostic reports that persistence failed to load, it leaves the XML file untouched rather than overwriting it; repair the XML while Emby is stopped and restart the server.

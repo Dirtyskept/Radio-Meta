@@ -1,0 +1,51 @@
+RADIO META PROXY — TROUBLESHOOTING
+==================================
+
+Start with diagnostics
+----------------------
+Run Radio Meta diagnostics while signed in as an Emby administrator. Find “Proxy health” and the “Proxy health” / “Proxy activity since plugin start” report lines. The report avoids printing the upstream URL, token, sidecar path, or raw FFmpeg output.
+
+“Proxy listener not running”
+----------------------------
+- The proxy starts when Emby starts, if a valid, fixed Station Folder is configured and available. Since 1.3.136 it also starts when you save Path settings with a Station Folder that exists, so no restart is needed after putting a missing folder back.
+- Check that the Station Folder still exists and is accessible to the Emby server service account.
+- Check the Emby server log for a proxy listener startup warning. Do not paste private URLs or tokens into a public forum.
+- If proxy-enabled stations exist but the listener is not running, treat this as a warning and test direct stations separately; direct playback does not depend on the proxy.
+
+“FFmpeg unavailable”
+--------------------
+- FFmpeg is separate from FFprobe. Confirm that ffmpeg.exe (Windows) or ffmpeg (Linux) can be found beside the configured FFprobe executable, beside the application, or through PATH.
+- The executable must be accessible to the account running Emby.
+- Do not put a different program under the ffmpeg filename just to satisfy the check.
+
+“Invalid sidecar”
+-----------------
+Radio Meta could not validate the sidecar's JSON, token shape, or upstream HTTP(S) URL. Re-open the station list and confirm the proxy checkbox state. Do not publish the sidecar contents; it includes the actual upstream URL and token. If the file is damaged, back up the station folder and use Radio Meta's proxy disable/re-enable flow only after verifying which file is the current .strm.
+
+“Orphan sidecar”
+-----------------
+A .radiometa-proxy.json file exists without a corresponding .strm file. This may be residue from an interrupted rename/delete. Back up the station folder and confirm there really is no matching station file before removing anything manually.
+
+“Sidecar mismatch”
+------------------
+The sidecar is valid, but its .strm does not point to the expected loopback proxy URL. This can happen after a partial edit or manual file change. Avoid editing the station while proxy is enabled. Check the recent station-file operations and confirm the current checkbox state before toggling it.
+
+“FFmpeg startup failures” or playback returns 502/503
+------------------------------------------------------
+- FFmpeg may be missing, unable to open the upstream stream, or unable to produce audio before the startup deadline.
+- The proxy returns 503 when a concurrency limit is reached. Try stopping another proxied playback before retrying.
+- The proxy returns 502 when the upstream stream could not be opened or audio did not start. A valid URL does not guarantee that the provider accepts FFmpeg or the MP3 output container.
+- The diagnostic counter is cumulative since plugin startup. It is not a permanent log and resets after restart.
+- FFmpeg's own error messages are deliberately left out of the Emby log, to keep stream URLs and tokens out of it. To see why FFmpeg fails on a stream, run it by hand from Emby's system folder: ffmpeg -hide_banner -i "STREAM-ADDRESS" -t 5 -f null -
+
+“Library refresh accepted, but station list did not change”
+---------------------------------------------------------
+The operation history reports file change, Emby library-refresh acceptance, and Radio Meta station-list refresh separately. “Accepted by Emby” means the refresh request was accepted; the server's scan may continue in the background. If the file operation is marked unconfirmed, inspect the station folder before repeating it.
+
+Playback works but metadata is empty
+------------------------------------
+Check the station metadata mode. StationOnly intentionally disables song metadata lookups. The proxy does not override that setting. Other stations may use ICY/Shoutcast metadata or may not provide usable metadata at all.
+
+Privacy reminder
+----------------
+Never share .radiometa-proxy.json contents, full .strm URLs with tokens, or unredacted upstream stream URLs. The diagnostic report is designed to omit those values.
