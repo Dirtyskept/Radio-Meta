@@ -20,7 +20,7 @@ Radio Meta adds one marked script block to Emby's web start page (`system/dashbo
 4. Press Ctrl+F5 once in each browser.
 
 ## Build (Windows)
-Copy Emby 4.10.2's `MediaBrowser.Common`, `Controller` and `Model.dll` into `RadioMeta/EmbyReferences/4.10.2` (see the README there), then run `.\Build-RadioMeta153.ps1`. Tests are in `Tests/`.
+Copy Emby 4.10.2's `MediaBrowser.Common`, `Controller` and `Model.dll` into `RadioMeta/EmbyReferences/4.10.2` (see the README there), then run `.\Build-RadioMeta154.ps1`. Tests are in `Tests/`.
 
 ## Licence
 Copyright (C) 2026 Dirtyskept. Radio Meta is free software under the [GNU General Public License, version 3](LICENSE): you may use, change and share it, and a changed version you share must also be under GPL-3.0. It comes with no warranty.

@@ -1,7 +1,7 @@
 /* AMD resource loaded through Emby's plugin-resource URL helper and module loader. */
 define([], function () {
 /*
- * Radio Meta 1.3.153 DLL-embedded Emby player integration.
+ * Radio Meta 1.3.154 DLL-embedded Emby player integration.
  *
  * This integration does not patch Emby's nowplayingbar.js or any other player
  * module. The plugin DLL adds one reversible inline bootstrap to the Emby
@@ -28,8 +28,8 @@ define([], function () {
 (function () {
     "use strict";
 
-    var GLOBAL_KEY = "__radioMetaPlayerIntegration1353";
-    var SCRIPT_VERSION = "1.3.153";
+    var GLOBAL_KEY = "__radioMetaPlayerIntegration1354";
+    var SCRIPT_VERSION = "1.3.154";
     if (window[GLOBAL_KEY]) return;
 
     var state = {
@@ -82,8 +82,8 @@ define([], function () {
 
     function log(message, detail) {
         try {
-            if (detail === undefined) console.info("Radio Meta 1.3.153: " + message);
-            else console.info("Radio Meta 1.3.153: " + message, detail);
+            if (detail === undefined) console.info("Radio Meta 1.3.154: " + message);
+            else console.info("Radio Meta 1.3.154: " + message, detail);
         } catch (_) { }
     }
 
@@ -91,7 +91,7 @@ define([], function () {
         var text = String(error && error.message ? error.message : error || "Unknown error");
         if (text === state.lastError) return;
         state.lastError = text;
-        console.warn("Radio Meta 1.3.153: " + message + " (" + text.slice(0, 180) + ")");
+        console.warn("Radio Meta 1.3.154: " + message + " (" + text.slice(0, 180) + ")");
     }
 
     function moduleDefault(moduleValue) {
@@ -316,6 +316,104 @@ define([], function () {
         } else if (state.holdBigPlayerLines) {
             // Emby redraws the lines itself for the new item.
             releaseBigPlayerLineHold();
+        }
+    }
+
+    // ---- LIVE line instead of the progress slider (1.3.154) -------------
+    // A live station has no running time, so Emby's players show an empty
+    // slider and an elapsed time counting up. While one plays, the slider and
+    // the time numbers are replaced by a thin line with "LIVE" in the middle,
+    // as in the owner's EmbyAudio app (LiveBar): rounded lines at 25% of the
+    // text colour, the word at 60%, semi-bold. Mini-player: on its top line
+    // (3 px line, 10 px text). Big player: in the slider's place (4 px line,
+    // 13 px text), the time numbers kept as empty space so nothing moves.
+    // Display only: Emby's slider is hidden, not changed, and comes back as
+    // soon as an item with a running time is shown. The lock screen and
+    // CarPlay don't use these elements.
+    var LIVE_BAR_CONTAINERS = [".nowPlayingBarPositionContainer", ".videoOsdPositionSliderContainer"];
+    var LIVE_ATTRIBUTE = "data-radiometa-live";
+    var LIVE_STYLE_ID = "radiometa-live-bar-style";
+    var LIVE_STYLE = [
+        ".radioMetaLiveBar{display:none}",
+        "html[data-radiometa-live] .radioMetaLiveBar{display:flex;align-items:center;position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);pointer-events:none;z-index:2}",
+        "html[data-radiometa-live] .videoOsdPositionSliderContainer{position:relative}",
+        "html[data-radiometa-live] .nowPlayingBarPositionContainer>:not(.radioMetaLiveBar),",
+        "html[data-radiometa-live] .videoOsdPositionSliderContainer>:not(.radioMetaLiveBar),",
+        "html[data-radiometa-live] .videoOsdPositionText,",
+        "html[data-radiometa-live] .videoOsdDurationText,",
+        "html[data-radiometa-live] .nowPlayingBarCurrentTime{visibility:hidden}",
+        ".radioMetaLiveBar-line{flex:1 1 auto;min-width:0;border-radius:999px;background:currentColor;opacity:.25}",
+        ".radioMetaLiveBar-text{flex:none;font-weight:600;line-height:1;opacity:.6}",
+        // Mini-player: the 12 px LIVE strip is centred on the bar's top line, where the progress line runs.
+        ".nowPlayingBarPositionContainer .radioMetaLiveBar{height:12px;gap:6px}",
+        // TV layout: the mini-player sits in the header and its progress line
+        // runs along the bottom edge, so the strip sits just inside that edge.
+        "html[data-radiometa-live] .headerNowPlaying .nowPlayingBarPositionContainer .radioMetaLiveBar{top:auto;bottom:0;transform:none}",
+        ".nowPlayingBarPositionContainer .radioMetaLiveBar-line{height:3px}",
+        ".nowPlayingBarPositionContainer .radioMetaLiveBar-text{font-size:10px}",
+        ".videoOsdPositionSliderContainer .radioMetaLiveBar{height:30px;gap:8px}",
+        ".videoOsdPositionSliderContainer .radioMetaLiveBar-line{height:4px}",
+        ".videoOsdPositionSliderContainer .radioMetaLiveBar-text{font-size:13px}"
+    ].join("");
+
+    function ensureLiveBarStyle() {
+        if (!document.getElementById || document.getElementById(LIVE_STYLE_ID)) return;
+        var parent = document.head || document.documentElement;
+        if (!parent || !document.createElement) return;
+        var style = document.createElement("style");
+        style.id = LIVE_STYLE_ID;
+        style.textContent = LIVE_STYLE;
+        parent.appendChild(style);
+    }
+
+    function ensureLiveBars() {
+        if (!document.querySelectorAll || !document.createElement) return;
+        LIVE_BAR_CONTAINERS.forEach(function (selector) {
+            Array.prototype.slice.call(document.querySelectorAll(selector)).forEach(function (container) {
+                if (!container || !container.querySelector || container.querySelector(".radioMetaLiveBar")) return;
+                var bar = document.createElement("div");
+                bar.className = "radioMetaLiveBar";
+                bar.setAttribute("aria-hidden", "true");
+                ["radioMetaLiveBar-line", "radioMetaLiveBar-text", "radioMetaLiveBar-line"].forEach(function (part) {
+                    var element = document.createElement("span");
+                    element.className = part;
+                    if (part === "radioMetaLiveBar-text") element.textContent = "LIVE";
+                    bar.appendChild(element);
+                });
+                container.appendChild(bar);
+            });
+        });
+    }
+
+    // Emby only sends displayitemupdated after fetching the new item, so on a
+    // stop or a switch the LIVE line would otherwise stay up for a moment over
+    // the next song or video. Playback signals settle it at once: a stop with
+    // nothing next clears it; a start or state change with an item decides it.
+    function updateLiveBarFromPlaybackEvent(eventName, args) {
+        if (!Array.isArray(args)) return;
+        if (eventName === "playbackstop") {
+            var next = args.some(function (arg) { return !!arg && typeof arg === "object" && !!arg.NextMediaType; });
+            if (!next) updateLiveBar(null);
+            return;
+        }
+        for (var i = 0; i < args.length; i++) {
+            var arg = args[i];
+            if (arg && typeof arg === "object" && arg.NowPlayingItem && typeof arg.NowPlayingItem === "object") {
+                updateLiveBar(arg.NowPlayingItem);
+                return;
+            }
+        }
+    }
+
+    function updateLiveBar(item) {
+        var root = document.documentElement;
+        if (!root || !root.setAttribute) return;
+        if (isLiveAudioStation(item)) {
+            ensureLiveBarStyle();
+            ensureLiveBars();
+            if (root.getAttribute(LIVE_ATTRIBUTE) !== "true") root.setAttribute(LIVE_ATTRIBUTE, "true");
+        } else if (root.getAttribute(LIVE_ATTRIBUTE) !== null) {
+            root.removeAttribute(LIVE_ATTRIBUTE);
         }
     }
 
@@ -686,6 +784,13 @@ define([], function () {
             if (eventName === "displayitemupdated" && Array.isArray(args)) {
                 try { updateBigPlayerLineHold(args[1] || args[0]); }
                 catch (error) { warn("could not hold the big player's line layout", error); }
+            }
+            if (eventName === "displayitemupdated" && Array.isArray(args)) {
+                try { updateLiveBar(args[1] || args[0]); }
+                catch (error) { warn("could not show the LIVE line", error); }
+            } else if (eventName === "playbackstop" || eventName === "playbackstart" || eventName === "statechange") {
+                try { updateLiveBarFromPlaybackEvent(eventName, args); }
+                catch (error) { warn("could not update the LIVE line", error); }
             }
 
             if (switchedFromTrack) {
@@ -1274,6 +1379,11 @@ define([], function () {
             }
 
             var modules = await loadEmbyModules();
+            // A player page built after the last display update gets its LIVE line here.
+            if (document.documentElement && document.documentElement.getAttribute &&
+                document.documentElement.getAttribute(LIVE_ATTRIBUTE) !== null) {
+                try { ensureLiveBars(); } catch (error) { warn("could not add the LIVE line", error); }
+            }
             if (ensurePlayerHooks(modules)) {
                 // Draw the current song again now that the players can get it.
                 state.lastTrackKey = "";
@@ -1426,5 +1536,5 @@ define([], function () {
     }, 500);
 }());
 
-    return { version: "1.3.153" };
+    return { version: "1.3.154" };
 });

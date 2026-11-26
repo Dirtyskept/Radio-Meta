@@ -1,5 +1,5 @@
 /*
- * Optional Node.js smoke test for the Radio Meta 1.3.153 embedded player bridge.
+ * Optional Node.js smoke test for the Radio Meta 1.3.154 embedded player bridge.
  * Simulates the Emby module/event contracts and the native display slots used
  * by Emby 4.10.x. It does not replace a live Emby/browser test.
  *
@@ -127,7 +127,8 @@ class FakeElement {
                     (selector === ".videoOsdParentTitle" && child.matches(selector)) ||
                     (selector === ".videoOsdTitle" && child.matches(selector)) ||
                     (selector === ".nowplayingbar-textitems" && child.classList.contains("nowplayingbar-textitems")) ||
-                    (selector === '[data-radiometa-part="artist"]' && child.getAttribute("data-radiometa-part") === "artist")) {
+                    (selector === '[data-radiometa-part="artist"]' && child.getAttribute("data-radiometa-part") === "artist") ||
+                    (selector === ".radioMetaLiveBar" && child.classList.contains("radioMetaLiveBar"))) {
                     results.push(child);
                 }
                 visit(child);
@@ -325,6 +326,16 @@ const testOutdatedScript = process.env.RADIOMETA_TEST_OUTDATED_SCRIPT === "1";
 // Edge did). Radio Meta must keep its display hook, put it back if it goes
 // missing anyway, and the players must keep getting each new song.
 const testPageHide = process.env.RADIOMETA_TEST_PAGEHIDE === "1";
+// RADIOMETA_TEST_LIVE_BAR=1: a live station shows the LIVE line in place of the
+// progress slider (mini-player and big player); a song with a running time
+// brings Emby's slider back.
+const testLiveBar = process.env.RADIOMETA_TEST_LIVE_BAR === "1";
+const htmlRoot = new FakeElement("html");
+const headElement = new FakeElement("head");
+const miniPositionContainer = new FakeElement("div", "nowPlayingBarPositionContainer sliderContainer");
+const bigPositionContainer = new FakeElement("div", "sliderContainer videoOsdPositionSliderContainer");
+miniPositionContainer.appendChild(new FakeElement("input", "nowPlayingBarPositionSlider"));
+bigPositionContainer.appendChild(new FakeElement("input", "videoOsdPositionSlider"));
 const windowListeners = {};
 const scriptVersionMatch = /var SCRIPT_VERSION = "([^"]+)"/.exec(fs.readFileSync(scriptPath, "utf8"));
 const SCRIPT_VERSION_IN_SOURCE = scriptVersionMatch ? scriptVersionMatch[1] : "";
@@ -392,6 +403,9 @@ let miniPlayerSelectorReads = 0;
 const documentStub = {
     visibilityState: "visible",
     body: null,
+    documentElement: htmlRoot,
+    head: headElement,
+    getElementById(id) { return headElement.children.find(child => child.id === id) || null; },
     addEventListener() { },
     querySelector(selector) {
         if (selector === ".nowPlayingSessions") {
@@ -402,6 +416,8 @@ const documentStub = {
     },
     querySelectorAll(selector) {
         if (selector === ".videoOsdText") return [fullPlayerContainer];
+        if (selector === ".nowPlayingBarPositionContainer") return [miniPositionContainer];
+        if (selector === ".videoOsdPositionSliderContainer") return [bigPositionContainer];
         if (selector.indexOf("nowPlayingBar") >= 0 || selector.indexOf("nowplayingbar-textitems") >= 0) {
             miniPlayerSelectorReads++;
             return [miniPlayerText];
@@ -463,6 +479,7 @@ setTimeout(() => {
     if (testBigPlayerOpen || testBigPlayerClosed) { runBigPlayerOpenTest(); return; }
     if (testOutdatedScript) { runNextPoll(checkOutdatedScript); return; }
     if (testPageHide) { runPageHideTest(); return; }
+    if (testLiveBar) { runLiveBarTest(); return; }
     // The first poll shows the song at once and starts the artist lookup. With a
     // library artist, the link is added on the next poll from the cache.
     if (libraryHasArtist) runNextPoll(checkResults);
@@ -470,7 +487,7 @@ setTimeout(() => {
 }, 40);
 
 function checkResults() {
-    const integration = windowStub.__radioMetaPlayerIntegration1353;
+    const integration = windowStub.__radioMetaPlayerIntegration1354;
     const activeTrack = integration && integration.activeTrack;
     const result = {
         activeTrack: activeTrack && { song: activeTrack.song, artist: activeTrack.artist, station: activeTrack.station },
@@ -631,7 +648,7 @@ function checkResults() {
     console.log(useServerFallback
         ? "PASS: with no session ProviderIds, the track came from /RadioMeta/MyCurrentTracks only."
         : "PASS: with session ProviderIds present, no server track request was made.");
-    console.log("PASS: Mini-player DOM is never queried or modified; Emby renders native markup/styles from Name and ArtistItems only.");
+    console.log("PASS: Mini-player text DOM is never queried or modified (only the LIVE line is added to its progress area); Emby renders native markup/styles from Name and ArtistItems only.");
     console.log("PASS: Emby's native full-player title and artist slots are untouched; station occupies only the third/album row.");
     console.log("PASS: DLL observer restores station text if Emby rerenders a stale value into the third/album row.");
     console.log("PASS: Dashboard song, artist, and station title use Emby's three native ActiveSession rows; original inline styles are preserved and the live-stream station line fills the unused runtime row.");
@@ -841,7 +858,7 @@ function runBigPlayerOpenTest() {
 }
 
 function checkOutdatedScript() {
-    const integration = windowStub.__radioMetaPlayerIntegration1353;
+    const integration = windowStub.__radioMetaPlayerIntegration1354;
     setTimeout(function () {
         const failures = [];
         if (versionChecks.length !== 1) failures.push("expected one version check, got " + versionChecks.length);
@@ -858,7 +875,7 @@ function checkOutdatedScript() {
 }
 
 function runPageHideTest() {
-    const integration = windowStub.__radioMetaPlayerIntegration1353;
+    const integration = windowStub.__radioMetaPlayerIntegration1354;
     const failures = [];
     function expect(condition, message) { if (!condition) failures.push(message); }
     function hookInPlace() {
@@ -899,4 +916,65 @@ function runPageHideTest() {
             console.log("PASS: pagehide keeps Radio Meta's player hooks; if they go missing anyway, the next poll puts them back once and redraws the current song, and the next song still reaches the players.");
         });
     });
+}
+
+function runLiveBarTest() {
+    const failures = [];
+    function expect(condition, message) { if (!condition) failures.push(message); }
+    function bars(container) { return container.children.filter(child => child.classList.contains("radioMetaLiveBar")); }
+
+    // The station in this test has no running time, so it is live.
+    events.trigger(miniPlayerOsd, "displayitemupdated", [item, Object.assign({}, item), {}]);
+    expect(htmlRoot.getAttribute("data-radiometa-live") === "true", "a live station did not mark the page as live");
+    expect(bars(miniPositionContainer).length === 1, "the mini-player has no LIVE line");
+    expect(bars(bigPositionContainer).length === 1, "the big player has no LIVE line");
+    const miniBar = bars(miniPositionContainer)[0];
+    expect(!!miniBar && miniBar.textContent === "LIVE", "the LIVE line does not read LIVE (" + (miniBar && miniBar.textContent) + ")");
+    expect(!!miniBar && miniBar.children.length === 3, "the LIVE line is not line - LIVE - line");
+    expect(!!miniBar && miniBar.getAttribute("aria-hidden") === "true", "the LIVE line is not hidden from screen readers");
+    expect(headElement.children.filter(child => child.id === "radiometa-live-bar-style").length === 1, "the LIVE line style was not added once");
+    expect(miniPositionContainer.children[0].classList.contains("nowPlayingBarPositionSlider"), "Emby's mini-player slider was removed");
+
+    // A second update must not add a second line or style.
+    events.trigger(miniPlayerOsd, "displayitemupdated", [item, Object.assign({}, item), {}]);
+    expect(bars(miniPositionContainer).length === 1 && bars(bigPositionContainer).length === 1, "the LIVE line was added twice");
+    expect(headElement.children.filter(child => child.id === "radiometa-live-bar-style").length === 1, "the LIVE line style was added twice");
+
+    // A song with a running time brings Emby's slider back.
+    const ordinarySong = { Id: "music-item-live-test", Name: "Ordinary Song", MediaType: "Audio", Type: "Audio", RunTimeTicks: 2000000000 };
+    events.trigger(miniPlayerOsd, "displayitemupdated", [ordinarySong, Object.assign({}, ordinarySong), {}]);
+    expect(htmlRoot.getAttribute("data-radiometa-live") === null, "a song with a running time still shows the LIVE line");
+
+    // And a station again shows it again, reusing the same element, also when
+    // the update comes from the big player.
+    const bigPlayerOsd = {};
+    events.trigger(bigPlayerOsd, "displayitemupdated", [item, Object.assign({}, item), {}]);
+    expect(htmlRoot.getAttribute("data-radiometa-live") === "true" && bars(miniPositionContainer).length === 1 && bars(bigPositionContainer).length === 1, "the LIVE line did not come back for the station");
+
+    // Emby's "no item" update (playback ended) clears it.
+    events.trigger(miniPlayerOsd, "displayitemupdated", [null, null, {}]);
+    expect(htmlRoot.getAttribute("data-radiometa-live") === null, "a display update with no item still shows the LIVE line");
+
+    // A stop with nothing next clears it at once, without waiting for a display update.
+    events.trigger(miniPlayerOsd, "displayitemupdated", [item, Object.assign({}, item), {}]);
+    const fakePlayer = {};
+    events.trigger(fakePlayer, "playbackstop", [{ NowPlayingItem: item }]);
+    expect(htmlRoot.getAttribute("data-radiometa-live") === null, "stopping a station did not clear the LIVE line");
+
+    // A stop with a next item leaves it to the next item's start signal, so a
+    // station-to-station switch doesn't flash Emby's slider.
+    events.trigger(miniPlayerOsd, "displayitemupdated", [item, Object.assign({}, item), {}]);
+    events.trigger(fakePlayer, "playbackstop", [{ NowPlayingItem: item, NextMediaType: "Audio" }]);
+    expect(htmlRoot.getAttribute("data-radiometa-live") === "true", "a stop with a next item cleared the LIVE line too early");
+    events.trigger(fakePlayer, "playbackstart", [{ NowPlayingItem: ordinarySong }]);
+    expect(htmlRoot.getAttribute("data-radiometa-live") === null, "starting a song after a station did not clear the LIVE line at once");
+    events.trigger(fakePlayer, "statechange", [{ NowPlayingItem: item }]);
+    expect(htmlRoot.getAttribute("data-radiometa-live") === "true", "a state change to a station did not show the LIVE line");
+
+    if (failures.length) {
+        console.error("FAIL: LIVE line: " + failures.join("; ") + ".");
+        process.exitCode = 1;
+        return;
+    }
+    console.log("PASS: a live station adds one LIVE line (line - LIVE - line) to the mini-player and big player slider areas and marks the page live, without removing Emby's slider; a song, an empty display update, or a stop with nothing next clears the mark, and a stop with a next item waits for that item's start. (CSS is not applied in this test.)");
 }

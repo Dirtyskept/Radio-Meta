@@ -1,9 +1,14 @@
-Radio Meta v1.3.153 Mainline Source
+Radio Meta v1.3.154 Mainline Source
 
-Builds against the oldest supported Emby (4.10.2) instead of whichever Emby is
-installed on the build machine, so one DLL loads on Emby 4.10.2 and newer
-versions. The Emby assemblies go in RadioMeta\EmbyReferences\4.10.2 once (see
-the README there); the folder is set by one line in RadioMeta.csproj. No
-change to what the plugin does. Everything in v1.3.152 is retained.
+LIVE line in Emby's web players. While a live station plays (audio with no
+running time), the progress slider is replaced by a thin line with "LIVE" in
+the middle, as in the EmbyAudio app: rounded lines in the text colour at 25%,
+the word at 60%, semi-bold. Mini-player: along its top line (3 px line, 10 px
+text), with its elapsed time hidden. Big player: in the slider's place (4 px
+line, 13 px text); the time numbers are hidden but keep their space, so
+nothing moves. Songs and other items with a running time keep Emby's slider,
+and it comes back as soon as one starts or playback stops. The lock screen, CarPlay, seeking,
+History and the settings page are unchanged. Everything in v1.3.153 is
+retained.
 
 See Logs\CHANGELOG.txt for details.
