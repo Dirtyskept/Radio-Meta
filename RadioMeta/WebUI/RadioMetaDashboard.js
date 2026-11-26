@@ -1,8 +1,8 @@
 define([], function () {
     'use strict';
 
-    window.__radioMetaDashboardControllerInfo_v1354 = {
-        version: '1.3.154',
+    window.__radioMetaDashboardControllerInfo_v1355 = {
+        version: '1.3.155',
         initialized: true,
         sourceMode: 'bundled-source-sections',
         sections: [
@@ -3145,7 +3145,7 @@ define([], function () {
 
             var checks = [];
             var startedAt = new Date();
-            var dashboardControllerInfo = window.__radioMetaDashboardControllerInfo_v1354;
+            var dashboardControllerInfo = window.__radioMetaDashboardControllerInfo_v1355;
             diagnosticAddCheck(checks,
                 dashboardControllerInfo && dashboardControllerInfo.initialized === true ? 'PASS' : 'WARN',
                 'Dashboard controller bundle',
@@ -3253,7 +3253,7 @@ define([], function () {
 
                 var localPlayerItemId = '';
                 try {
-                    var bridgeForSessionMatch = window.__radioMetaPlayerIntegration1354;
+                    var bridgeForSessionMatch = window.__radioMetaPlayerIntegration1355;
                     var bridgePlayer = bridgeForSessionMatch && bridgeForSessionMatch.modules &&
                         bridgeForSessionMatch.modules.currentPlayer && bridgeForSessionMatch.modules.currentPlayer.get();
                     var bridgeItem = bridgePlayer && bridgeForSessionMatch.modules.playbackManager &&
@@ -3465,7 +3465,7 @@ define([], function () {
                     var bridgeLookupWindow = window;
                     for (var bridgeLookupDepth = 0; bridgeLookupDepth < 5; bridgeLookupDepth++) {
                         try {
-                            browserPlayerBridge = bridgeLookupWindow.__radioMetaPlayerIntegration1354 || null;
+                            browserPlayerBridge = bridgeLookupWindow.__radioMetaPlayerIntegration1355 || null;
                             if (browserPlayerBridge || !bridgeLookupWindow.parent || bridgeLookupWindow.parent === bridgeLookupWindow) break;
                             bridgeLookupWindow = bridgeLookupWindow.parent;
                         } catch (_) {

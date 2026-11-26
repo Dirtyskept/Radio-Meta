@@ -79,6 +79,10 @@ back), Radio Meta puts it back on its next check, within 2.5 seconds.
   in place with invisible text, so the layout doesn't jump. On a station
   change, the previous song's text is cleared at once.
 - Dashboard Now Playing: song, artist and station in the card's three rows.
+  Since 1.3.155 each card where Radio Meta shows a station's song also gets
+  the LIVE line (below), in the mini-player's size, where Emby draws a song's
+  progress bar. Radio Meta adds one element to that card and removes it when
+  the device stops the station.
 - Mini-player: its text only through the item fields and signals above.
 - LIVE line (since 1.3.154): while a live station plays (audio with no running
   time), a thin line with "LIVE" in the middle replaces the progress slider,

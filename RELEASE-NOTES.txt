@@ -1,4 +1,10 @@
-Radio Meta v1.3.154 Mainline Source
+Radio Meta v1.3.155 Mainline Source
+
+LIVE line on the Dashboard. On the Dashboard's Now Playing card, a device
+playing a Radio Meta station now shows the same LIVE line as the mini-player,
+at exactly the same size, where Emby draws a song's progress bar. The card
+keeps the same height as a song card. It shows on every device's card where
+Radio Meta shows the station's song, EmbyAudio included. Everything in v1.3.154 is retained:
 
 LIVE line in Emby's web players. While a live station plays (audio with no
 running time), the progress slider is replaced by a thin line with "LIVE" in

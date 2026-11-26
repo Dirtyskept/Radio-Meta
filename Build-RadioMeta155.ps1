@@ -31,7 +31,7 @@ foreach ($name in $required) {
     }
 }
 
-Write-Host 'Building Radio Meta 1.3.154 against:' -ForegroundColor Cyan
+Write-Host 'Building Radio Meta 1.3.155 against:' -ForegroundColor Cyan
 foreach ($name in $required) {
     $info = (Get-Item -LiteralPath (Join-Path $embyPath $name)).VersionInfo
     Write-Host ("  {0}  {1}" -f $name, $info.FileVersion)

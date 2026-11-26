@@ -1,7 +1,7 @@
 /* AMD resource loaded through Emby's plugin-resource URL helper and module loader. */
 define([], function () {
 /*
- * Radio Meta 1.3.154 DLL-embedded Emby player integration.
+ * Radio Meta 1.3.155 DLL-embedded Emby player integration.
  *
  * This integration does not patch Emby's nowplayingbar.js or any other player
  * module. The plugin DLL adds one reversible inline bootstrap to the Emby
@@ -28,8 +28,8 @@ define([], function () {
 (function () {
     "use strict";
 
-    var GLOBAL_KEY = "__radioMetaPlayerIntegration1354";
-    var SCRIPT_VERSION = "1.3.154";
+    var GLOBAL_KEY = "__radioMetaPlayerIntegration1355";
+    var SCRIPT_VERSION = "1.3.155";
     if (window[GLOBAL_KEY]) return;
 
     var state = {
@@ -82,8 +82,8 @@ define([], function () {
 
     function log(message, detail) {
         try {
-            if (detail === undefined) console.info("Radio Meta 1.3.154: " + message);
-            else console.info("Radio Meta 1.3.154: " + message, detail);
+            if (detail === undefined) console.info("Radio Meta 1.3.155: " + message);
+            else console.info("Radio Meta 1.3.155: " + message, detail);
         } catch (_) { }
     }
 
@@ -91,7 +91,7 @@ define([], function () {
         var text = String(error && error.message ? error.message : error || "Unknown error");
         if (text === state.lastError) return;
         state.lastError = text;
-        console.warn("Radio Meta 1.3.154: " + message + " (" + text.slice(0, 180) + ")");
+        console.warn("Radio Meta 1.3.155: " + message + " (" + text.slice(0, 180) + ")");
     }
 
     function moduleDefault(moduleValue) {
@@ -332,7 +332,8 @@ define([], function () {
     // CarPlay don't use these elements.
     var LIVE_BAR_CONTAINERS = [".nowPlayingBarPositionContainer", ".videoOsdPositionSliderContainer"];
     var LIVE_ATTRIBUTE = "data-radiometa-live";
-    var LIVE_STYLE_ID = "radiometa-live-bar-style";
+    // Versioned, so a page that still has an older script's style gets this one too.
+    var LIVE_STYLE_ID = "radiometa-live-bar-style-" + SCRIPT_VERSION;
     var LIVE_STYLE = [
         ".radioMetaLiveBar{display:none}",
         "html[data-radiometa-live] .radioMetaLiveBar{display:flex;align-items:center;position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);pointer-events:none;z-index:2}",
@@ -344,16 +345,29 @@ define([], function () {
         "html[data-radiometa-live] .nowPlayingBarCurrentTime{visibility:hidden}",
         ".radioMetaLiveBar-line{flex:1 1 auto;min-width:0;border-radius:999px;background:currentColor;opacity:.25}",
         ".radioMetaLiveBar-text{flex:none;font-weight:600;line-height:1;opacity:.6}",
-        // Mini-player: the 12 px LIVE strip is centred on the bar's top line, where the progress line runs.
-        ".nowPlayingBarPositionContainer .radioMetaLiveBar{height:12px;gap:6px}",
+        // Two sizes, from EmbyAudio. Small: mini-player and Dashboard card
+        // (12 px strip, 3 px line, 10 px text). Large: big player (30 px
+        // strip, 4 px line, 13 px text). Gap about 0.6 x the text size. Fixed
+        // pixels, so the small LIVE is exactly the same size in both places.
+        ".radioMetaLiveBar-small{height:12px;gap:6px}",
+        ".radioMetaLiveBar-small .radioMetaLiveBar-line{height:3px}",
+        ".radioMetaLiveBar-small .radioMetaLiveBar-text{font-size:10px}",
+        ".radioMetaLiveBar-large{height:30px;gap:8px}",
+        ".radioMetaLiveBar-large .radioMetaLiveBar-line{height:4px}",
+        ".radioMetaLiveBar-large .radioMetaLiveBar-text{font-size:13px}",
+        // Mini-player: the strip is centred on its top line, where the progress line runs.
         // TV layout: the mini-player sits in the header and its progress line
         // runs along the bottom edge, so the strip sits just inside that edge.
         "html[data-radiometa-live] .headerNowPlaying .nowPlayingBarPositionContainer .radioMetaLiveBar{top:auto;bottom:0;transform:none}",
-        ".nowPlayingBarPositionContainer .radioMetaLiveBar-line{height:3px}",
-        ".nowPlayingBarPositionContainer .radioMetaLiveBar-text{font-size:10px}",
-        ".videoOsdPositionSliderContainer .radioMetaLiveBar{height:30px;gap:8px}",
-        ".videoOsdPositionSliderContainer .radioMetaLiveBar-line{height:4px}",
-        ".videoOsdPositionSliderContainer .radioMetaLiveBar-text{font-size:13px}"
+        // Dashboard Now Playing card (1.3.155): Emby puts a song's progress bar
+        // in an .innerCardFooter at the top of the card's lower half
+        // (.activeSession .innerCardFooter{top:5.4em}); a live station has
+        // none. Radio Meta adds its own .innerCardFooter there, the height of
+        // Emby's bar as drawn (.itemProgressBar, .4em; measured), with the strip centred on it, so the card keeps
+        // the same height as a song card. Emby's inner footer is white text
+        // with a shadow, meant for pictures; this one uses the card's text colour.
+        ".radioMetaLiveCardFooter{height:.4em;padding:0!important;overflow:visible!important;color:inherit!important;text-shadow:none!important;pointer-events:none}",
+        ".radioMetaLiveCardFooter .radioMetaLiveBar{display:flex;align-items:center;position:absolute;left:0;right:0;top:50%;transform:translateY(-50%)}"
     ].join("");
 
     function ensureLiveBarStyle() {
@@ -366,23 +380,59 @@ define([], function () {
         parent.appendChild(style);
     }
 
+    function createLiveBar(size) {
+        var bar = document.createElement("div");
+        bar.className = "radioMetaLiveBar radioMetaLiveBar-" + size;
+        bar.setAttribute("aria-hidden", "true");
+        ["radioMetaLiveBar-line", "radioMetaLiveBar-text", "radioMetaLiveBar-line"].forEach(function (part) {
+            var element = document.createElement("span");
+            element.className = part;
+            if (part === "radioMetaLiveBar-text") element.textContent = "LIVE";
+            bar.appendChild(element);
+        });
+        return bar;
+    }
+
     function ensureLiveBars() {
         if (!document.querySelectorAll || !document.createElement) return;
         LIVE_BAR_CONTAINERS.forEach(function (selector) {
+            var size = selector === ".videoOsdPositionSliderContainer" ? "large" : "small";
             Array.prototype.slice.call(document.querySelectorAll(selector)).forEach(function (container) {
                 if (!container || !container.querySelector || container.querySelector(".radioMetaLiveBar")) return;
-                var bar = document.createElement("div");
-                bar.className = "radioMetaLiveBar";
-                bar.setAttribute("aria-hidden", "true");
-                ["radioMetaLiveBar-line", "radioMetaLiveBar-text", "radioMetaLiveBar-line"].forEach(function (part) {
-                    var element = document.createElement("span");
-                    element.className = part;
-                    if (part === "radioMetaLiveBar-text") element.textContent = "LIVE";
-                    bar.appendChild(element);
-                });
-                container.appendChild(bar);
+                container.appendChild(createLiveBar(size));
             });
         });
+    }
+
+    // Dashboard Now Playing card of a session playing a Radio Meta station.
+    // Shown by the card itself, not by the page's live mark: the Dashboard
+    // lists every device, not only this browser.
+    function isOwnLiveFooter(element) {
+        return !!element && element.isConnected !== false && !!element.classList &&
+            element.classList.contains("radioMetaLiveCardFooter");
+    }
+
+    function addDashboardLiveBar(titleElement, original) {
+        var cardBox = titleElement && titleElement.closest ? titleElement.closest(".cardBox") : null;
+        if (!cardBox || !cardBox.querySelector || !document.createElement) return;
+        // Emby's Dashboard updates cards in place, so a saved footer may have
+        // been reused for one of Emby's own elements: forget it then.
+        if (original.createdLiveFooter && !isOwnLiveFooter(original.createdLiveFooter)) original.createdLiveFooter = null;
+        var existing = cardBox.querySelector(".radioMetaLiveCardFooter");
+        // Emby drew a progress bar: the item has a running time, so it isn't live.
+        if (cardBox.querySelector(".cardProgressBarContainer")) {
+            if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+            original.createdLiveFooter = null;
+            return;
+        }
+        if (existing) { original.createdLiveFooter = existing; return; }
+        ensureLiveBarStyle();
+        var footer = document.createElement("div");
+        footer.className = "innerCardFooter radioMetaLiveCardFooter";
+        footer.setAttribute("aria-hidden", "true");
+        footer.appendChild(createLiveBar("small"));
+        cardBox.appendChild(footer);
+        original.createdLiveFooter = footer;
     }
 
     // Emby only sends displayitemupdated after fetching the new item, so on a
@@ -1190,6 +1240,9 @@ define([], function () {
             if (original.createdStationRow && original.createdStationRow.parentNode) {
                 original.createdStationRow.parentNode.removeChild(original.createdStationRow);
             }
+            if (isOwnLiveFooter(original.createdLiveFooter) && original.createdLiveFooter.parentNode) {
+                original.createdLiveFooter.parentNode.removeChild(original.createdLiveFooter);
+            }
         } else if (typeof original === "string") {
             element.innerHTML = original;
         }
@@ -1267,6 +1320,9 @@ define([], function () {
             stationRow.setAttribute("data-radiometa-part", "station");
             stationRow.setAttribute("data-radiometa-station-key", stationKey);
         }
+
+        try { addDashboardLiveBar(element, original); }
+        catch (error) { warn("could not add the LIVE line to the Dashboard card", error); }
 
         // If a future Emby card template adds rows beyond its native third
         // line, hide only additional empty placeholders. The third row is now
@@ -1536,5 +1592,5 @@ define([], function () {
     }, 500);
 }());
 
-    return { version: "1.3.154" };
+    return { version: "1.3.155" };
 });

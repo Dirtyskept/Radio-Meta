@@ -1,5 +1,5 @@
 /*
- * Optional Node.js smoke test for the Radio Meta 1.3.154 embedded player bridge.
+ * Optional Node.js smoke test for the Radio Meta 1.3.155 embedded player bridge.
  * Simulates the Emby module/event contracts and the native display slots used
  * by Emby 4.10.x. It does not replace a live Emby/browser test.
  *
@@ -128,7 +128,9 @@ class FakeElement {
                     (selector === ".videoOsdTitle" && child.matches(selector)) ||
                     (selector === ".nowplayingbar-textitems" && child.classList.contains("nowplayingbar-textitems")) ||
                     (selector === '[data-radiometa-part="artist"]' && child.getAttribute("data-radiometa-part") === "artist") ||
-                    (selector === ".radioMetaLiveBar" && child.classList.contains("radioMetaLiveBar"))) {
+                    (selector === ".radioMetaLiveBar" && child.classList.contains("radioMetaLiveBar")) ||
+                    (selector === ".radioMetaLiveCardFooter" && child.classList.contains("radioMetaLiveCardFooter")) ||
+                    (selector === ".cardProgressBarContainer" && child.classList.contains("cardProgressBarContainer"))) {
                     results.push(child);
                 }
                 visit(child);
@@ -138,6 +140,13 @@ class FakeElement {
         return results;
     }
     querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+    closest(selector) {
+        const name = selector.charAt(0) === "." ? selector.slice(1) : null;
+        for (let node = this; node; node = node.parentElement) {
+            if (name && node.classList.contains(name)) return node;
+        }
+        return null;
+    }
 }
 
 class FakeMutationObserver {
@@ -305,7 +314,11 @@ dashboardRuntime.textContent = "\u00a0";
 dashboardCardFooter.appendChild(dashboardTitle);
 dashboardCardFooter.appendChild(dashboardArtist);
 dashboardCardFooter.appendChild(dashboardRuntime);
-dashboardRoot.appendChild(dashboardCardFooter);
+// Emby's session card: .cardBox holds the footer; a live station has no
+// progress bar, so Radio Meta adds its LIVE line to the card box (1.3.155).
+const dashboardCardBox = new FakeElement("div", "cardBox cardBox-sideFooter");
+dashboardCardBox.appendChild(dashboardCardFooter);
+dashboardRoot.appendChild(dashboardCardBox);
 
 // RADIOMETA_TEST_LIBRARY_ARTIST=1 simulates an Emby library that contains the
 // playing artist; otherwise the library has no matching artist.
@@ -330,6 +343,11 @@ const testPageHide = process.env.RADIOMETA_TEST_PAGEHIDE === "1";
 // progress slider (mini-player and big player); a song with a running time
 // brings Emby's slider back.
 const testLiveBar = process.env.RADIOMETA_TEST_LIVE_BAR === "1";
+// RADIOMETA_TEST_DASHBOARD_LIVE=1: the Dashboard card's LIVE line over several
+// polls: no duplicates, removed when Emby draws a progress bar, back when it
+// goes, and removed when Radio Meta stops labelling the card.
+const testDashboardLive = process.env.RADIOMETA_TEST_DASHBOARD_LIVE === "1";
+let dashboardHidden = false;
 const htmlRoot = new FakeElement("html");
 const headElement = new FakeElement("head");
 const miniPositionContainer = new FakeElement("div", "nowPlayingBarPositionContainer sliderContainer");
@@ -410,12 +428,16 @@ const documentStub = {
     querySelector(selector) {
         if (selector === ".nowPlayingSessions") {
             dashboardSelectorReads++;
+            if (dashboardHidden) return null;
             return dashboardRoot;
         }
         return null;
     },
     querySelectorAll(selector) {
         if (selector === ".videoOsdText") return [fullPlayerContainer];
+        if (selector === '[data-radiometa-player-integration="1"]') {
+            return dashboardTitle.getAttribute("data-radiometa-player-integration") === "1" ? [dashboardTitle] : [];
+        }
         if (selector === ".nowPlayingBarPositionContainer") return [miniPositionContainer];
         if (selector === ".videoOsdPositionSliderContainer") return [bigPositionContainer];
         if (selector.indexOf("nowPlayingBar") >= 0 || selector.indexOf("nowplayingbar-textitems") >= 0) {
@@ -480,6 +502,7 @@ setTimeout(() => {
     if (testOutdatedScript) { runNextPoll(checkOutdatedScript); return; }
     if (testPageHide) { runPageHideTest(); return; }
     if (testLiveBar) { runLiveBarTest(); return; }
+    if (testDashboardLive) { runDashboardLiveTest(); return; }
     // The first poll shows the song at once and starts the artist lookup. With a
     // library artist, the link is added on the next poll from the cache.
     if (libraryHasArtist) runNextPoll(checkResults);
@@ -487,7 +510,7 @@ setTimeout(() => {
 }, 40);
 
 function checkResults() {
-    const integration = windowStub.__radioMetaPlayerIntegration1354;
+    const integration = windowStub.__radioMetaPlayerIntegration1355;
     const activeTrack = integration && integration.activeTrack;
     const result = {
         activeTrack: activeTrack && { song: activeTrack.song, artist: activeTrack.artist, station: activeTrack.station },
@@ -651,6 +674,15 @@ function checkResults() {
     console.log("PASS: Mini-player text DOM is never queried or modified (only the LIVE line is added to its progress area); Emby renders native markup/styles from Name and ArtistItems only.");
     console.log("PASS: Emby's native full-player title and artist slots are untouched; station occupies only the third/album row.");
     console.log("PASS: DLL observer restores station text if Emby rerenders a stale value into the third/album row.");
+    const dashboardLiveFooters = dashboardCardBox.children.filter(child => child.classList.contains("radioMetaLiveCardFooter"));
+    const dashboardLiveBar = dashboardLiveFooters[0] && dashboardLiveFooters[0].children[0];
+    if (dashboardLiveFooters.length !== 1 || !dashboardLiveBar || dashboardLiveBar.textContent !== "LIVE" ||
+        !dashboardLiveBar.classList.contains("radioMetaLiveBar-small")) {
+        console.error("FAIL: the Dashboard card of a live station should get one small LIVE line (found " + dashboardLiveFooters.length + ").");
+        process.exitCode = 1;
+        return;
+    }
+    console.log("PASS: the Dashboard card of a live station gets one LIVE line in the mini-player's size, added to the card box (position not checked here).");
     console.log("PASS: Dashboard song, artist, and station title use Emby's three native ActiveSession rows; original inline styles are preserved and the live-stream station line fills the unused runtime row.");
     console.log("PASS: original .strm image tags, image IDs, aspect ratio, blur hashes, and album artwork metadata are retained.");
     checkPlayQueueKeepsStationName(integration);
@@ -858,7 +890,7 @@ function runBigPlayerOpenTest() {
 }
 
 function checkOutdatedScript() {
-    const integration = windowStub.__radioMetaPlayerIntegration1354;
+    const integration = windowStub.__radioMetaPlayerIntegration1355;
     setTimeout(function () {
         const failures = [];
         if (versionChecks.length !== 1) failures.push("expected one version check, got " + versionChecks.length);
@@ -875,7 +907,7 @@ function checkOutdatedScript() {
 }
 
 function runPageHideTest() {
-    const integration = windowStub.__radioMetaPlayerIntegration1354;
+    const integration = windowStub.__radioMetaPlayerIntegration1355;
     const failures = [];
     function expect(condition, message) { if (!condition) failures.push(message); }
     function hookInPlace() {
@@ -932,13 +964,16 @@ function runLiveBarTest() {
     expect(!!miniBar && miniBar.textContent === "LIVE", "the LIVE line does not read LIVE (" + (miniBar && miniBar.textContent) + ")");
     expect(!!miniBar && miniBar.children.length === 3, "the LIVE line is not line - LIVE - line");
     expect(!!miniBar && miniBar.getAttribute("aria-hidden") === "true", "the LIVE line is not hidden from screen readers");
-    expect(headElement.children.filter(child => child.id === "radiometa-live-bar-style").length === 1, "the LIVE line style was not added once");
+    expect(headElement.children.filter(child => String(child.id).indexOf("radiometa-live-bar-style-") === 0).length === 1, "the LIVE line style was not added once");
+    expect(miniBar.classList.contains("radioMetaLiveBar-small"), "the mini-player LIVE line is not the small size");
+    const bigBar = bars(bigPositionContainer)[0];
+    expect(!!bigBar && bigBar.classList.contains("radioMetaLiveBar-large"), "the big player LIVE line is not the large size");
     expect(miniPositionContainer.children[0].classList.contains("nowPlayingBarPositionSlider"), "Emby's mini-player slider was removed");
 
     // A second update must not add a second line or style.
     events.trigger(miniPlayerOsd, "displayitemupdated", [item, Object.assign({}, item), {}]);
     expect(bars(miniPositionContainer).length === 1 && bars(bigPositionContainer).length === 1, "the LIVE line was added twice");
-    expect(headElement.children.filter(child => child.id === "radiometa-live-bar-style").length === 1, "the LIVE line style was added twice");
+    expect(headElement.children.filter(child => String(child.id).indexOf("radiometa-live-bar-style-") === 0).length === 1, "the LIVE line style was added twice");
 
     // A song with a running time brings Emby's slider back.
     const ordinarySong = { Id: "music-item-live-test", Name: "Ordinary Song", MediaType: "Audio", Type: "Audio", RunTimeTicks: 2000000000 };
@@ -977,4 +1012,33 @@ function runLiveBarTest() {
         return;
     }
     console.log("PASS: a live station adds one LIVE line (line - LIVE - line) to the mini-player and big player slider areas and marks the page live, without removing Emby's slider; a song, an empty display update, or a stop with nothing next clears the mark, and a stop with a next item waits for that item's start. (CSS is not applied in this test.)");
+}
+
+function runDashboardLiveTest() {
+    const failures = [];
+    const footers = () => dashboardCardBox.children.filter(child => child.classList.contains("radioMetaLiveCardFooter"));
+    if (footers().length !== 1) failures.push("first poll: expected one LIVE line, found " + footers().length);
+    runNextPoll(() => {
+        if (footers().length !== 1) failures.push("second poll: expected one LIVE line, found " + footers().length);
+        const progress = new FakeElement("div", "innerCardFooter");
+        progress.appendChild(new FakeElement("div", "itemProgressBar cardProgressBarContainer"));
+        dashboardCardBox.appendChild(progress);
+        runNextPoll(() => {
+            if (footers().length !== 0) failures.push("with Emby's progress bar the LIVE line should go");
+            dashboardCardBox.removeChild(progress);
+            runNextPoll(() => {
+                if (footers().length !== 1) failures.push("without the progress bar the LIVE line should come back");
+                dashboardHidden = true;
+                runNextPoll(() => {
+                    if (footers().length !== 0) failures.push("leaving the Dashboard should remove the LIVE line");
+                    if (failures.length) {
+                        console.error("FAIL: Dashboard LIVE line: " + failures.join("; ") + ".");
+                        process.exitCode = 1;
+                        return;
+                    }
+                    console.log("PASS: the Dashboard card keeps one LIVE line across polls, drops it when Emby draws a progress bar, gets it back, and loses it when Radio Meta stops labelling the card. (Position is not checked here.)");
+                });
+            });
+        });
+    });
 }
