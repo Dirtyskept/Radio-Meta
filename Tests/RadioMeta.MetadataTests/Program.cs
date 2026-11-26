@@ -38,6 +38,51 @@ var tests = new List<(string Name, Action Test)>
         Equal("Artist", parsed.Artist);
         Equal("Song - Live Version", parsed.SongTitle);
     }),
+    ("Artist repeated at the start of the title is removed (1.3.157)", () =>
+    {
+        var parsed = RadioStreamTitleParser.SplitStreamTitle("Ella Langley - Ella Langley - Choosin' Texas");
+        Equal("Ella Langley", parsed.Artist);
+        Equal("Choosin' Texas", parsed.SongTitle);
+    }),
+    ("Repeated artist is removed regardless of case and dash type", () =>
+    {
+        var parsed = RadioStreamTitleParser.SplitStreamTitle("Ella Langley – ELLA LANGLEY — Choosin' Texas");
+        Equal("Ella Langley", parsed.Artist);
+        Equal("Choosin' Texas", parsed.SongTitle);
+    }),
+    ("Repeated artist is removed in other formats too", () =>
+    {
+        var parsed = RadioStreamTitleParser.SplitStreamTitle("Billie Eilish ~ Billie Eilish - Bad Guy ~ 246 ~ 0 ^");
+        Equal("Billie Eilish", parsed.Artist);
+        Equal("Bad Guy", parsed.SongTitle);
+    }),
+    ("Title that only contains the artist's name is kept", () =>
+    {
+        var parsed = RadioStreamTitleParser.SplitStreamTitle("Queen - Killer Queen");
+        Equal("Queen", parsed.Artist);
+        Equal("Killer Queen", parsed.SongTitle);
+    }),
+    ("Title that starts with the artist's name without a dash is kept", () =>
+    {
+        var parsed = RadioStreamTitleParser.SplitStreamTitle("Bad Company - Bad Company");
+        Equal("Bad Company", parsed.SongTitle);
+        parsed = RadioStreamTitleParser.SplitStreamTitle("Queen - Queens Of The Night");
+        Equal("Queens Of The Night", parsed.SongTitle);
+    }),
+    ("Song named after its artist with a version label is kept", () =>
+    {
+        Equal("Black Sabbath - 2009 Remaster", RadioStreamTitleParser.SplitStreamTitle("Black Sabbath - Black Sabbath - 2009 Remaster").SongTitle);
+        Equal("Bad Company - Live", RadioStreamTitleParser.SplitStreamTitle("Bad Company - Bad Company - Live").SongTitle);
+        Equal("Iron Maiden - Remastered 2015", RadioStreamTitleParser.SplitStreamTitle("Iron Maiden - Iron Maiden - Remastered 2015").SongTitle);
+        Equal("Ladytron - Radio Edit", RadioStreamTitleParser.SplitStreamTitle("Ladytron - Ladytron - Radio Edit").SongTitle);
+        Equal("Queen - Live at Wembley", RadioStreamTitleParser.SplitStreamTitle("Queen - Queen - Live at Wembley").SongTitle);
+    }),
+    ("Repeated artist before a song whose name starts like a label is still removed", () => Equal(
+        "Live Forever",
+        RadioStreamTitleParser.SplitStreamTitle("Oasis - Oasis - Live Forever").SongTitle)),
+    ("Title that is the artist plus a dash and nothing else is kept", () => Equal(
+        "Prince -",
+        RadioStreamTitleParser.RemoveRepeatedArtist("Prince", "Prince -"))),
     ("iHeartRadio cart record: artist before ' - text=', title in text", () =>
     {
         var parsed = RadioStreamTitleParser.SplitStreamTitle(@"Ed Sheeran - text=""Bad Habits"" song_spot=""M"" MediaBaseId=""2720462"" itunesTrackId=""0"" amgTrackId=""-1"" length=""00:03:47"" unsID=""-1"" spotInstanceId=""-1""");
@@ -391,7 +436,7 @@ var tests = new List<(string Name, Action Test)>
 };
 
 var failed = 0;
-Console.WriteLine("Radio Meta v1.3.156 - Offline Metadata Regression Harness");
+Console.WriteLine("Radio Meta v1.3.157 - Offline Metadata Regression Harness");
 Console.WriteLine("Runs the same parsing source used by the plugin. No network, Emby server, or audio is used.");
 Console.WriteLine(new string('-', 72));
 foreach (var item in tests)

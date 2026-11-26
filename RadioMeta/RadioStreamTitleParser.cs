@@ -129,7 +129,7 @@ internal static class RadioStreamTitleParser
             TryDoublePipeFormat(normalizedTitle, out parsed) ||
             TryDashFormat(normalizedTitle, out parsed))
         {
-            return parsed;
+            return (parsed.Artist, RemoveRepeatedArtist(parsed.Artist, parsed.SongTitle));
         }
 
         // No recognizable format: show the whole value as the song title.
@@ -266,6 +266,47 @@ internal static class RadioStreamTitleParser
         parsed = (artist, title);
         return true;
     }
+
+    /// <summary>
+    /// Some stations repeat the artist at the start of the title, e.g.
+    /// "Ella Langley - Ella Langley - Choosin' Texas", which splits into artist
+    /// "Ella Langley" and title "Ella Langley - Choosin' Texas". When the title
+    /// starts with exactly the artist (any case) followed by one of the dash
+    /// separators, that part is removed. Titles that merely contain the name
+    /// ("Killer Queen" by Queen) or are only the name are left alone, and so
+    /// are songs named after their artist with a version label after the dash
+    /// ("Black Sabbath - 2009 Remaster" by Black Sabbath). (1.3.157)
+    /// </summary>
+    internal static string RemoveRepeatedArtist(string artist, string title)
+    {
+        artist = (artist ?? string.Empty).Trim();
+        title = (title ?? string.Empty).Trim();
+        if (artist.Length == 0 || title.Length <= artist.Length ||
+            !title.StartsWith(artist, StringComparison.OrdinalIgnoreCase))
+        {
+            return title;
+        }
+
+        var rest = title[artist.Length..];
+        foreach (var separator in ArtistTitleSeparators)
+        {
+            if (rest.StartsWith(separator, StringComparison.Ordinal))
+            {
+                var song = rest[separator.Length..].Trim();
+                return song.Length > 0 && !IsVersionLabel(song) ? song : title;
+            }
+        }
+
+        return title;
+    }
+
+    // A dash suffix that names a version, not a song: "Live", "2009 Remaster",
+    // "Radio Edit", "Live at Wembley", "Mono Version", "Remastered 2011".
+    private static readonly Regex VersionLabelRegex = new(
+        @"^(?:(?:19|20)\d{2}\s+)?(?:live|remaster(?:ed)?|(?:radio |single |extended |album )?(?:edit|mix|version)|demo|mono|stereo|acoustic|instrumental|single|bonus track)\b(?:\s+(?:version|mix|edit|(?:19|20)\d{2})\b)?(?:\s+(?:at|from|in)\b.*)?$",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static bool IsVersionLabel(string value) => VersionLabelRegex.IsMatch(value.Trim());
 
     // Accepts a recognized artist/title only when both are present.
     private static bool TryUse(string artist, string title, out (string Artist, string SongTitle) parsed)

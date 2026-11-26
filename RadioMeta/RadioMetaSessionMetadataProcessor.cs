@@ -391,9 +391,12 @@ internal sealed class RadioMetaSessionMetadataProcessor
             song = ReadMetadataProperty(item, "SongTitle", allowCollection: false);
         }
 
-        return artist.Length > 0 && song.Length > 0 &&
-            !_plugin.CurrentTrackService.IsMetadataPhraseIgnored(stationName, song) &&
-            !_plugin.CurrentTrackService.IsMetadataPhraseIgnored(stationName, artist + " - " + song);
+        // Ignore phrases are checked against the title as received; the shown
+        // song drops a repeated artist, as for stream titles (1.3.157).
+        var ignored = _plugin.CurrentTrackService.IsMetadataPhraseIgnored(stationName, song) ||
+            _plugin.CurrentTrackService.IsMetadataPhraseIgnored(stationName, artist + " - " + song);
+        song = RadioStreamTitleParser.RemoveRepeatedArtist(artist, song);
+        return artist.Length > 0 && song.Length > 0 && !ignored;
     }
 
     private static string ReadMetadataProperty(

@@ -1,4 +1,16 @@
-Radio Meta v1.3.156 Mainline Source
+Radio Meta v1.3.157 Mainline Source
+
+Repeated artist removed from song titles. Some stations send the artist twice,
+e.g. "Ella Langley - Ella Langley - Choosin' Texas", which showed as the song
+"Ella Langley - Choosin' Texas". When a song title starts with exactly the
+artist's name followed by a dash, that part is now removed, so it shows as
+"Choosin' Texas". This applies to new songs everywhere Radio Meta shows them;
+History entries already saved are not changed. Titles that only contain the
+name, such as "Killer Queen" by Queen, are left alone, and so are songs named
+after their artist with a version after the dash ("Black Sabbath - 2009
+Remaster" by Black Sabbath). A title correction saved from History before this
+version, for a title that had the artist repeated, may need saving again.
+Everything in v1.3.156 is retained:
 
 LIVE lines in theme colours. The LIVE line and the word now use the theme
 colour of the bar they stand in for, and follow the theme when it changes:

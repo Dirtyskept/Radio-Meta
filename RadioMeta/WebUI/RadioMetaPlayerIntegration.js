@@ -1,7 +1,7 @@
 /* AMD resource loaded through Emby's plugin-resource URL helper and module loader. */
 define([], function () {
 /*
- * Radio Meta 1.3.156 DLL-embedded Emby player integration.
+ * Radio Meta 1.3.157 DLL-embedded Emby player integration.
  *
  * This integration does not patch Emby's nowplayingbar.js or any other player
  * module. The plugin DLL adds one reversible inline bootstrap to the Emby
@@ -28,8 +28,8 @@ define([], function () {
 (function () {
     "use strict";
 
-    var GLOBAL_KEY = "__radioMetaPlayerIntegration1356";
-    var SCRIPT_VERSION = "1.3.156";
+    var GLOBAL_KEY = "__radioMetaPlayerIntegration1357";
+    var SCRIPT_VERSION = "1.3.157";
     if (window[GLOBAL_KEY]) return;
 
     var state = {
@@ -82,8 +82,8 @@ define([], function () {
 
     function log(message, detail) {
         try {
-            if (detail === undefined) console.info("Radio Meta 1.3.156: " + message);
-            else console.info("Radio Meta 1.3.156: " + message, detail);
+            if (detail === undefined) console.info("Radio Meta 1.3.157: " + message);
+            else console.info("Radio Meta 1.3.157: " + message, detail);
         } catch (_) { }
     }
 
@@ -91,7 +91,7 @@ define([], function () {
         var text = String(error && error.message ? error.message : error || "Unknown error");
         if (text === state.lastError) return;
         state.lastError = text;
-        console.warn("Radio Meta 1.3.156: " + message + " (" + text.slice(0, 180) + ")");
+        console.warn("Radio Meta 1.3.157: " + message + " (" + text.slice(0, 180) + ")");
     }
 
     function moduleDefault(moduleValue) {
@@ -1612,5 +1612,5 @@ define([], function () {
     }, 500);
 }());
 
-    return { version: "1.3.156" };
+    return { version: "1.3.157" };
 });

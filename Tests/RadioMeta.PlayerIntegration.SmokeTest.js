@@ -1,5 +1,5 @@
 /*
- * Optional Node.js smoke test for the Radio Meta 1.3.156 embedded player bridge.
+ * Optional Node.js smoke test for the Radio Meta 1.3.157 embedded player bridge.
  * Simulates the Emby module/event contracts and the native display slots used
  * by Emby 4.10.x. It does not replace a live Emby/browser test.
  *
@@ -510,7 +510,7 @@ setTimeout(() => {
 }, 40);
 
 function checkResults() {
-    const integration = windowStub.__radioMetaPlayerIntegration1356;
+    const integration = windowStub.__radioMetaPlayerIntegration1357;
     const activeTrack = integration && integration.activeTrack;
     const result = {
         activeTrack: activeTrack && { song: activeTrack.song, artist: activeTrack.artist, station: activeTrack.station },
@@ -890,7 +890,7 @@ function runBigPlayerOpenTest() {
 }
 
 function checkOutdatedScript() {
-    const integration = windowStub.__radioMetaPlayerIntegration1356;
+    const integration = windowStub.__radioMetaPlayerIntegration1357;
     setTimeout(function () {
         const failures = [];
         if (versionChecks.length !== 1) failures.push("expected one version check, got " + versionChecks.length);
@@ -907,7 +907,7 @@ function checkOutdatedScript() {
 }
 
 function runPageHideTest() {
-    const integration = windowStub.__radioMetaPlayerIntegration1356;
+    const integration = windowStub.__radioMetaPlayerIntegration1357;
     const failures = [];
     function expect(condition, message) { if (!condition) failures.push(message); }
     function hookInPlace() {
