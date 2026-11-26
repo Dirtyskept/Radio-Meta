@@ -1,5 +1,5 @@
 /*
- * Static regression checks for Radio Meta 1.3.155 diagnostic versioning and
+ * Static regression checks for Radio Meta 1.3.156 diagnostic versioning and
  * local Emby session selection. Run: node .\Tests\RadioMeta.Diagnostics.SmokeTest.js
  */
 "use strict";
@@ -19,9 +19,9 @@ const service = fs.readFileSync(servicePath, "utf8");
 const project = fs.readFileSync(projectPath, "utf8");
 const integrationClass = fs.readFileSync(integrationClassPath, "utf8");
 
-assert(shell.includes("__radioMetaDashboardControllerInfo_v1355"), "Dashboard version marker should be 1.3.155");
-assert(shell.includes("version: '1.3.155'"), "Dashboard controller should report 1.3.155");
-assert(project.includes("<Version>1.3.155</Version>"), "Plugin project version should be 1.3.155");
+assert(shell.includes("__radioMetaDashboardControllerInfo_v1356"), "Dashboard version marker should be 1.3.156");
+assert(shell.includes("version: '1.3.156'"), "Dashboard controller should report 1.3.156");
+assert(project.includes("<Version>1.3.156</Version>"), "Plugin project version should be 1.3.156");
 assert(runner.includes("/^1\\.3\\./.test(pluginVersion)"), "Diagnostics should accept the 1.3 mainline");
 assert(!runner.includes("experiment remains unverified"), "Obsolete unverified experiment wording must be removed");
 assert(runner.includes("localRadioSessionCandidates = activeRadioSessions.filter"), "Local session selection must consider Radio Meta-bearing rows");
@@ -43,7 +43,7 @@ const activeSession = { DeviceId: "firefox-device", NowPlayingItem: stationItem 
 const activeEntry = { session: activeSession, item: stationItem, song: "Test Song", artist: "Test Artist", station: "Test Station" };
 const value = (object, pascal, camel) => object ? (object[pascal] !== undefined ? object[pascal] : (object[camel] !== undefined ? object[camel] : "")) : "";
 const fakeWindow = {
-    __radioMetaPlayerIntegration1355: {
+    __radioMetaPlayerIntegration1356: {
         modules: {
             currentPlayer: { get: () => ({ isLocalPlayer: true }) },
             playbackManager: { currentItem: () => ({ Id: "strm-station-id" }) }

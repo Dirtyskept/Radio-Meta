@@ -1,5 +1,5 @@
 /*
- * Optional Node.js smoke test for the Radio Meta 1.3.155 embedded player bridge.
+ * Optional Node.js smoke test for the Radio Meta 1.3.156 embedded player bridge.
  * Simulates the Emby module/event contracts and the native display slots used
  * by Emby 4.10.x. It does not replace a live Emby/browser test.
  *
@@ -510,7 +510,7 @@ setTimeout(() => {
 }, 40);
 
 function checkResults() {
-    const integration = windowStub.__radioMetaPlayerIntegration1355;
+    const integration = windowStub.__radioMetaPlayerIntegration1356;
     const activeTrack = integration && integration.activeTrack;
     const result = {
         activeTrack: activeTrack && { song: activeTrack.song, artist: activeTrack.artist, station: activeTrack.station },
@@ -890,7 +890,7 @@ function runBigPlayerOpenTest() {
 }
 
 function checkOutdatedScript() {
-    const integration = windowStub.__radioMetaPlayerIntegration1355;
+    const integration = windowStub.__radioMetaPlayerIntegration1356;
     setTimeout(function () {
         const failures = [];
         if (versionChecks.length !== 1) failures.push("expected one version check, got " + versionChecks.length);
@@ -907,7 +907,7 @@ function checkOutdatedScript() {
 }
 
 function runPageHideTest() {
-    const integration = windowStub.__radioMetaPlayerIntegration1355;
+    const integration = windowStub.__radioMetaPlayerIntegration1356;
     const failures = [];
     function expect(condition, message) { if (!condition) failures.push(message); }
     function hookInPlace() {
@@ -969,6 +969,14 @@ function runLiveBarTest() {
     const bigBar = bars(bigPositionContainer)[0];
     expect(!!bigBar && bigBar.classList.contains("radioMetaLiveBar-large"), "the big player LIVE line is not the large size");
     expect(miniPositionContainer.children[0].classList.contains("nowPlayingBarPositionSlider"), "Emby's mini-player slider was removed");
+
+    // 1.3.156: theme colours and Emby's thicknesses (static checks of the style text).
+    const liveStyle = (headElement.children.find(child => String(child.id).indexOf("radiometa-live-bar-style-") === 0) || {}).textContent || "";
+    expect(liveStyle.indexOf("--theme-text-color-hue") >= 0 && liveStyle.indexOf("--slider-lower-opacity") >= 0, "the players' LIVE colour does not use Emby's slider colour");
+    expect(liveStyle.indexOf(".radioMetaLiveCardFooter .radioMetaLiveBar{--radiometa-live-color:hsl(var(--theme-primary-color-hue)") >= 0, "the Dashboard LIVE colour does not use Emby's accent colour");
+    expect(liveStyle.indexOf(".radioMetaLiveBar-large .radioMetaLiveBar-line{height:.4em}") >= 0 && liveStyle.indexOf("html.layout-tv .radioMetaLiveBar-large .radioMetaLiveBar-line{height:.5em}") >= 0, "the big player's LIVE line is not as thick as Emby's slider");
+    expect(liveStyle.indexOf(".radioMetaLiveCardFooter .radioMetaLiveBar-small .radioMetaLiveBar-line{height:.4em}") >= 0, "the Dashboard LIVE line is not as thick as Emby's progress bar");
+    expect(liveStyle.indexOf(".radioMetaLiveBar-small .radioMetaLiveBar-line{height:3px}") >= 0, "the mini-player LIVE line is no longer 3 px");
 
     // A second update must not add a second line or style.
     events.trigger(miniPlayerOsd, "displayitemupdated", [item, Object.assign({}, item), {}]);

@@ -391,7 +391,7 @@ var tests = new List<(string Name, Action Test)>
 };
 
 var failed = 0;
-Console.WriteLine("Radio Meta v1.3.155 - Offline Metadata Regression Harness");
+Console.WriteLine("Radio Meta v1.3.156 - Offline Metadata Regression Harness");
 Console.WriteLine("Runs the same parsing source used by the plugin. No network, Emby server, or audio is used.");
 Console.WriteLine(new string('-', 72));
 foreach (var item in tests)

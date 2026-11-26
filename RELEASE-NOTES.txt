@@ -1,4 +1,12 @@
-Radio Meta v1.3.155 Mainline Source
+Radio Meta v1.3.156 Mainline Source
+
+LIVE lines in theme colours. The LIVE line and the word now use the theme
+colour of the bar they stand in for, and follow the theme when it changes:
+in the big player and mini-player the colour of the played part of Emby's
+slider (white in the dark themes); on the Dashboard card Emby's progress bar
+colour (the accent colour, green by default). The big player's line is as thick
+as Emby's slider, the Dashboard line as thick as Emby's progress bar; the
+mini-player keeps its 3 px line. Everything in v1.3.155 is retained:
 
 LIVE line on the Dashboard. On the Dashboard's Now Playing card, a device
 playing a Radio Meta station now shows the same LIVE line as the mini-player,

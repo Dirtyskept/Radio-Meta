@@ -1,4 +1,4 @@
-RADIO META v1.3.155 — START HERE
+RADIO META v1.3.156 — START HERE
 
 This is the Radio Meta source package, not a compiled DLL.
 
@@ -7,8 +7,8 @@ This is the Radio Meta source package, not a compiled DLL.
    WHAT-RADIO-META-CHANGES-IN-THE-WEB-PLAYER.txt lists what the player script
    changes in the web app while a page is open.
 2. Extract the complete ZIP.
-3. Open PowerShell in the extracted RadioMeta-v1.3.155 folder.
-4. Run: .\Build-RadioMeta155.ps1
+3. Open PowerShell in the extracted RadioMeta-v1.3.156 folder.
+4. Run: .\Build-RadioMeta156.ps1
    It builds against RadioMeta\EmbyReferences\4.10.2 (copy three Emby DLLs
    there once: RadioMeta\EmbyReferences\README.txt), so the DLL also loads on
    older Emby versions back to 4.10.2.

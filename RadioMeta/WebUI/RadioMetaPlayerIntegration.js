@@ -1,7 +1,7 @@
 /* AMD resource loaded through Emby's plugin-resource URL helper and module loader. */
 define([], function () {
 /*
- * Radio Meta 1.3.155 DLL-embedded Emby player integration.
+ * Radio Meta 1.3.156 DLL-embedded Emby player integration.
  *
  * This integration does not patch Emby's nowplayingbar.js or any other player
  * module. The plugin DLL adds one reversible inline bootstrap to the Emby
@@ -28,8 +28,8 @@ define([], function () {
 (function () {
     "use strict";
 
-    var GLOBAL_KEY = "__radioMetaPlayerIntegration1355";
-    var SCRIPT_VERSION = "1.3.155";
+    var GLOBAL_KEY = "__radioMetaPlayerIntegration1356";
+    var SCRIPT_VERSION = "1.3.156";
     if (window[GLOBAL_KEY]) return;
 
     var state = {
@@ -82,8 +82,8 @@ define([], function () {
 
     function log(message, detail) {
         try {
-            if (detail === undefined) console.info("Radio Meta 1.3.155: " + message);
-            else console.info("Radio Meta 1.3.155: " + message, detail);
+            if (detail === undefined) console.info("Radio Meta 1.3.156: " + message);
+            else console.info("Radio Meta 1.3.156: " + message, detail);
         } catch (_) { }
     }
 
@@ -91,7 +91,7 @@ define([], function () {
         var text = String(error && error.message ? error.message : error || "Unknown error");
         if (text === state.lastError) return;
         state.lastError = text;
-        console.warn("Radio Meta 1.3.155: " + message + " (" + text.slice(0, 180) + ")");
+        console.warn("Radio Meta 1.3.156: " + message + " (" + text.slice(0, 180) + ")");
     }
 
     function moduleDefault(moduleValue) {
@@ -323,10 +323,14 @@ define([], function () {
     // A live station has no running time, so Emby's players show an empty
     // slider and an elapsed time counting up. While one plays, the slider and
     // the time numbers are replaced by a thin line with "LIVE" in the middle,
-    // as in the owner's EmbyAudio app (LiveBar): rounded lines at 25% of the
-    // text colour, the word at 60%, semi-bold. Mini-player: on its top line
-    // (3 px line, 10 px text). Big player: in the slider's place (4 px line,
-    // 13 px text), the time numbers kept as empty space so nothing moves.
+    // as in the owner's EmbyAudio app (LiveBar): rounded line, semi-bold word,
+    // rounded line. Since 1.3.156 the line and the word use the theme colour
+    // of the bar they stand in for, so they follow the theme: in the players
+    // the played part of Emby's slider (.emby-slider-background-lower), on
+    // the Dashboard Emby's progress bar (.itemProgressBarForeground, the
+    // accent colour). Mini-player: on its top line (3 px line, 10 px text).
+    // Big player: in the slider's place, as thick as Emby's slider track
+    // (13 px text), the time numbers kept as empty space so nothing moves.
     // Display only: Emby's slider is hidden, not changed, and comes back as
     // soon as an item with a running time is shown. The lock screen and
     // CarPlay don't use these elements.
@@ -343,17 +347,33 @@ define([], function () {
         "html[data-radiometa-live] .videoOsdPositionText,",
         "html[data-radiometa-live] .videoOsdDurationText,",
         "html[data-radiometa-live] .nowPlayingBarCurrentTime{visibility:hidden}",
-        ".radioMetaLiveBar-line{flex:1 1 auto;min-width:0;border-radius:999px;background:currentColor;opacity:.25}",
-        ".radioMetaLiveBar-text{flex:none;font-weight:600;line-height:1;opacity:.6}",
+        // Players: Emby's slider "played" colour (theme text colour at --slider-lower-opacity).
+        ".radioMetaLiveBar{--radiometa-live-color:hsla(var(--theme-text-color-hue),var(--theme-text-color-saturation),var(--theme-text-color-lightness),var(--slider-lower-opacity,.7))}",
+        // Dashboard: Emby's progress bar colour (the theme's accent colour).
+        ".radioMetaLiveCardFooter .radioMetaLiveBar{--radiometa-live-color:hsl(var(--theme-primary-color-hue),var(--theme-primary-color-saturation),var(--theme-primary-color-lightness))}",
+        // opacity:1 overrides an older Radio Meta style still on the page (1.3.154/155 used opacity).
+        ".radioMetaLiveBar-line{flex:1 1 auto;min-width:0;border-radius:999px;background:var(--radiometa-live-color);opacity:1}",
+        // In Emby the played part lies on the slider's track (theme text colour at .3), so
+        // the players' line is drawn the same way to look exactly like it.
+        ".nowPlayingBarPositionContainer .radioMetaLiveBar-line,.videoOsdPositionSliderContainer .radioMetaLiveBar-line{background:linear-gradient(var(--radiometa-live-color),var(--radiometa-live-color)),hsla(var(--theme-text-color-hue),var(--theme-text-color-saturation),var(--theme-text-color-lightness),.3)}",
+        ".radioMetaLiveBar-text{flex:none;font-weight:600;line-height:1;color:var(--radiometa-live-color);opacity:1}",
         // Two sizes, from EmbyAudio. Small: mini-player and Dashboard card
-        // (12 px strip, 3 px line, 10 px text). Large: big player (30 px
-        // strip, 4 px line, 13 px text). Gap about 0.6 x the text size. Fixed
-        // pixels, so the small LIVE is exactly the same size in both places.
+        // (12 px strip, 10 px text; 3 px line in the mini-player, Emby's bar
+        // thickness on the Dashboard). Large: big player (30 px strip, 13 px
+        // text, line as thick as Emby's slider track). Gap about 0.6 x the
+        // text size. The text is fixed pixels, so LIVE reads the same size in
+        // the mini-player and on the Dashboard.
         ".radioMetaLiveBar-small{height:12px;gap:6px}",
         ".radioMetaLiveBar-small .radioMetaLiveBar-line{height:3px}",
         ".radioMetaLiveBar-small .radioMetaLiveBar-text{font-size:10px}",
         ".radioMetaLiveBar-large{height:30px;gap:8px}",
-        ".radioMetaLiveBar-large .radioMetaLiveBar-line{height:4px}",
+        // As thick as Emby's slider track (.emby-slider-container: .4em with a mouse, .5em on touch).
+        ".radioMetaLiveBar-large .radioMetaLiveBar-line{height:.4em}",
+        "@media not all and (pointer:fine){.radioMetaLiveBar-large .radioMetaLiveBar-line{height:.5em}}",
+        // Emby's TV layout always uses .5em (emby-slider_tv.css).
+        "html.layout-tv .radioMetaLiveBar-large .radioMetaLiveBar-line{height:.5em}",
+        // Dashboard: as thick as Emby's progress bar (.itemProgressBar, .4em).
+        ".radioMetaLiveCardFooter .radioMetaLiveBar-small .radioMetaLiveBar-line{height:.4em}",
         ".radioMetaLiveBar-large .radioMetaLiveBar-text{font-size:13px}",
         // Mini-player: the strip is centred on its top line, where the progress line runs.
         // TV layout: the mini-player sits in the header and its progress line
@@ -1592,5 +1612,5 @@ define([], function () {
     }, 500);
 }());
 
-    return { version: "1.3.155" };
+    return { version: "1.3.156" };
 });
